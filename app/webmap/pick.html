@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Выбор точки</title>
+  <title>Pick a Point</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
   <style>
@@ -21,20 +21,20 @@
 <body>
 <div id="map"></div>
 <div class="panel">
-  <div>Координаты: <b id="coords"></b></div>
-  <div style="margin-top:6px">Контакт (необязательно): <input id="contact"></div>
-  <div style="margin-top:6px">Готовый текст для бота: <textarea id="out" readonly></textarea></div>
+  <div>Coordinates: <b id="coords"></b></div>
+  <div style="margin-top:6px">Contact (optional): <input id="contact"></div>
+  <div style="margin-top:6px">Message to paste into the bot chat: <textarea id="out" readonly></textarea></div>
   <div class="row">
-    <div id="bvol" class="btn">Скопировать волонтёра</div>
-    <div id="bfire" class="btn">Скопировать очаг (fire)</div>
+    <div id="bvol" class="btn">Copy Volunteer</div>
+    <div id="bfire" class="btn">Copy Fire (fire)</div>
   </div>
-  <div class="small">Вставьте скопированный текст в чат с ботом.</div>
+  <div class="small">Paste the copied text back into the bot chat.</div>
 </div>
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
 const MODE    = "__MODE__";     // "vol" | "fire"
-const CONTACT = "__CONTACT__";  // начальный контакт
+const CONTACT = "__CONTACT__";
 
 const map = L.map('map').setView([__LAT__, __LON__], __ZOOM__);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
@@ -45,11 +45,11 @@ function fmt(v){ return (Math.round(v*1e6)/1e6).toFixed(6); }
 function coords(){ const ll = marker.getLatLng(); return `${fmt(ll.lat)}, ${fmt(ll.lng)}`; }
 
 async function copyToClipboard(t){
-  try{ await navigator.clipboard.writeText(t); alert("Скопировано"); }
+  try{ await navigator.clipboard.writeText(t); alert("Copied"); }
   catch(e){
     const ta = document.createElement('textarea'); ta.value=t; ta.style.position='fixed'; ta.style.opacity='0';
     document.body.appendChild(ta); ta.focus(); ta.select();
-    try{ document.execCommand('copy'); alert("Скопировано"); } catch(_){ alert("Скопируйте вручную:\n"+t); }
+    try{ document.execCommand('copy'); alert("Copied"); } catch(_){ alert("Copy manually:\n"+t); }
     document.body.removeChild(ta);
   }
 }
@@ -58,10 +58,10 @@ function popupHtml(){
   const c = coords();
   return `
     <div style="min-width:180px">
-      <b>Координаты</b><br>${c}<br>
+      <b>Coordinates</b><br>${c}<br>
       <button onclick="copyToClipboard('${c.replace(/\s/g,'')}')" 
               style="margin-top:6px;padding:6px 10px;border:1px solid #ddd;border-radius:6px;cursor:pointer;">
-        Скопировать
+        Copy Coordinates
       </button>
     </div>`;
 }
@@ -81,7 +81,7 @@ function build(mode){
   const contact = $contact.value.trim();
   const head = mode === "fire" ? `fire ${c}` : c;
   const tail = contact ? ` ${contact}` : "";
-  return head + tail + (mode === "fire" ? " дым" : " заметка");
+  return head + tail + (mode === "fire" ? " smoke" : " note");
 }
 function update(){
   $coords.textContent = coords();
