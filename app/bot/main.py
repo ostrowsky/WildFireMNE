@@ -104,8 +104,12 @@ def _read_template(name: str) -> str:
 @app.get("/", response_class=HTMLResponse)
 def index():
     html = _read_template("index.html")
-    # index.html должен грузить /geojson сам; замены не требуются
+    html = (html
+            .replace("__LAT__", str(CENTER_LAT))
+            .replace("__LON__", str(CENTER_LON))
+            .replace("__ZOOM__", str(CENTER_ZOOM)))
     return HTMLResponse(html)
+
 
 @app.get("/pick", response_class=HTMLResponse)
 def pick(request: Request,
