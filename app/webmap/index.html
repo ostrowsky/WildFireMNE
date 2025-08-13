@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Живая карта</title>
+  <title>Live Map</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
   <style>
@@ -30,14 +30,13 @@
 <script>
 const DEFAULT_CENTER = [__LAT__, __LON__];
 const DEFAULT_ZOOM   = __ZOOM__;
-const AUTO_REFRESH_MS = 30000;
+const AUTO_REFRESH_MS = 10000;
 
 const urlParams = new URLSearchParams(location.search);
 const focusId = urlParams.get("focus");
 const uid = urlParams.get("uid");
 const sig = urlParams.get("sig");
 
-// Стартовое положение карты задано сразу
 const map = L.map('map', { zoomControl: true }).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
 let geoLayer = null;
 
@@ -51,13 +50,13 @@ function fmtTS(ts){
 function fmt(v){ return (Math.round(v*1e6)/1e6).toFixed(6); }
 
 async function copyText(t){
-  try { await navigator.clipboard.writeText(t); alert("Координаты скопированы"); }
+  try { await navigator.clipboard.writeText(t); alert("Coordinates copied"); }
   catch(e){
     const ta = document.createElement('textarea');
     ta.value = t; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta);
     ta.focus(); ta.select();
-    try{ document.execCommand('copy'); alert("Координаты скопированы"); }
-    catch(_){ alert("Скопируйте вручную:\n"+t); }
+    try{ document.execCommand('copy'); alert("Coordinates copied"); }
+    catch(_){ alert("Copy manually:\n"+t); }
     document.body.removeChild(ta);
   }
 }
@@ -87,7 +86,7 @@ function popupHtml(feature){
       ${pr.text ? `<div style="margin-top:4px">${pr.text}</div>` : ``}
       <div style="margin-top:6px">
         <a class="btn" href="${gmaps}" target="_blank">Google Maps</a>
-        <a class="btn" href="#" onclick="copyText('${coordsText.replace(/\s/g,'')}');return false;">Скопировать</a>
+        <a class="btn" href="#" onclick="copyText('${coordsText.replace(/\s/g,'')}');return false;">Copy Coordinates</a>
       </div>
   `;
 
@@ -102,7 +101,7 @@ function popupHtml(feature){
   if(uid && sig && pr.user_id && String(pr.user_id) === uid){
     html += `
       <div style="margin-top:8px">
-        <a class="btn" href="#" onclick="delEvent(${pr.id});return false;">Удалить</a>
+        <a class="btn" href="#" onclick="delEvent(${pr.id});return false;">🗑 Delete</a>
       </div>
     `;
   }
@@ -111,12 +110,12 @@ function popupHtml(feature){
 }
 
 async function delEvent(id){
-  if(!confirm('Удалить эту точку?')) return;
+  if(!confirm('Delete this point?')) return;
   try{
     const r = await fetch(`/event/${id}?uid=${uid}&sig=${sig}`, {method:'DELETE'});
     if(r.ok){ refresh(); }
-    else { alert('Не удалось удалить'); }
-  }catch(e){ console.error(e); alert('Ошибка сети'); }
+    else { alert('Failed to delete'); }
+  }catch(e){ console.error(e); alert('Network error'); }
 }
 
 async function refresh(){
@@ -127,10 +126,7 @@ async function refresh(){
     if(geoLayer){ geoLayer.remove(); }
     geoLayer = L.geoJSON(data, {
       pointToLayer: (_, latlng) => L.circleMarker(latlng, {radius:8}),
-      onEachFeature: (f, layer) => {
-        const html = popupHtml(f);
-        layer.bindPopup(html);
-      },
+      onEachFeature: (f, layer) => { layer.bindPopup(popupHtml(f)); },
       style: f => {
         const typ = f.properties.type;
         const color = (typ==='fire') ? '#e53935' : '#1e88e5';
