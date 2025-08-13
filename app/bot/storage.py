@@ -1,8 +1,7 @@
-# app/bot/storage.py
 from __future__ import annotations
 import os
 import sqlite3
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 DB_PATH = os.getenv("DB_PATH", os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "wildfire.db")))
 
@@ -13,12 +12,12 @@ CREATE TABLE IF NOT EXISTS events(
     type TEXT NOT NULL,              -- 'fire' | 'volunteer'
     lat REAL,
     lon REAL,
-    user_id INTEGER,                 -- автор
+    user_id INTEGER,
     group_id INTEGER,
     text TEXT,
-    photo_file_id TEXT,              -- зарезервировано
+    photo_file_id TEXT,
     status TEXT DEFAULT 'active',
-    contact TEXT                     -- @username или телефон
+    contact TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_events_type_ts ON events(type, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_events_coords ON events(lat, lon);
@@ -41,7 +40,6 @@ def init_db():
                 c.execute(s)
 
 def migrate():
-    # добавляем поле contact, если старый файл БД
     with sqlite3.connect(DB_PATH) as c:
         cols = [r[1] for r in c.execute("PRAGMA table_info(events)")]
         if "contact" not in cols:
@@ -81,14 +79,15 @@ def fetch_geojson() -> Dict[str, Any]:
         for row in c.execute(
             """
             SELECT e.id, e.ts, e.type, e.lat, e.lon, e.text, e.status, e.contact, e.user_id,
-                   (SELECT COUNT(1) FROM photos p WHERE p.event_id=e.id) AS photo_count
+                   (SELECT COUNT(1) FROM photos p WHERE p.event_id=e.id) AS photo_count,
+                   (SELECT p.file_id FROM photos p WHERE p.event_id=e.id ORDER BY p.id DESC LIMIT 1) AS last_photo
             FROM events e
             WHERE e.lat IS NOT NULL AND e.lon IS NOT NULL
             ORDER BY e.ts DESC
             LIMIT 5000
             """
         ):
-            fid, ts, typ, lat, lon, text, status, contact, user_id, photo_count = row
+            fid, ts, typ, lat, lon, text, status, contact, user_id, photo_count, last_photo = row
             features.append(
                 {
                     "type": "Feature",
@@ -99,6 +98,7 @@ def fetch_geojson() -> Dict[str, Any]:
                         "text": text,
                         "status": status,
                         "photos": int(photo_count),
+                        "photo_file_id": last_photo,
                         "contact": contact,
                         "user_id": int(user_id) if user_id is not None else None,
                     },
