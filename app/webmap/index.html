@@ -28,8 +28,8 @@
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
-const DEFAULT_CENTER = [__LAT__, __LON__];
-const DEFAULT_ZOOM   = __ZOOM__;
+const DEFAULT_CENTER = [42.179, 18.942];
+const DEFAULT_ZOOM   = 12;
 const AUTO_REFRESH_MS = 30000;
 
 const urlParams = new URLSearchParams(location.search);
@@ -37,7 +37,8 @@ const focusId = urlParams.get("focus");
 const uid = urlParams.get("uid");
 const sig = urlParams.get("sig");
 
-const map = L.map('map', { zoomControl: true });
+// Стартовое положение карты задано сразу
+const map = L.map('map', { zoomControl: true }).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
 let geoLayer = null;
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
@@ -113,7 +114,7 @@ function popupHtml(feature){
 async function delEvent(id){
   if(!confirm('Удалить эту точку?')) return;
   try{
-    const r = await fetch(\`/event/${id}?uid=${uid}&sig=${sig}\`, {method:'DELETE'});
+    const r = await fetch(`/event/${id}?uid=${uid}&sig=${sig}`, {method:'DELETE'});
     if(r.ok){ refresh(); }
     else { alert('Не удалось удалить'); }
   }catch(e){ console.error(e); alert('Ошибка сети'); }
@@ -138,6 +139,8 @@ async function refresh(){
       }
     }).addTo(map);
 
+    setTimeout(() => map.invalidateSize(), 0);
+
     if(data.features.length){
       const b = geoLayer.getBounds();
       if(b.isValid()) map.fitBounds(b.pad(0.2));
@@ -148,11 +151,11 @@ async function refresh(){
           map.setView(latlng, 16);
         }
       }
-    }else{
-      map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
     }
   }catch(e){
     console.error("refresh failed", e);
+    // Если ошибка — просто центрируем карту
+    map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
   }
 }
 
