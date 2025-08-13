@@ -1,0 +1,96 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Выбор точки</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    .panel { position:absolute; left:8px; right:8px; bottom:8px; background:rgba(255,255,255,.96); padding:10px; border-radius:10px; font-family: system-ui, Arial; }
+    .row { display:flex; gap:8px; margin-top:6px; }
+    .btn { flex:1; padding:10px; text-align:center; border:1px solid #ddd; border-radius:8px; cursor:pointer; user-select:none; }
+    .btn:active { background:#eee; }
+    .small { font-size:12px; opacity:.7; }
+    input, textarea { width:100%; padding:8px; border:1px solid #ddd; border-radius:8px; }
+    textarea { height:56px; }
+    .active { border-color:#06c; }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<div class="panel">
+  <div>Координаты: <b id="coords"></b></div>
+  <div style="margin-top:6px">Контакт (необязательно): <input id="contact" placeholder="@username или +382..."></div>
+  <div style="margin-top:6px">Готовый текст для бота:<textarea id="out" readonly></textarea></div>
+  <div class="row">
+    <div id="bvol" class="btn">Скопировать волонтёра</div>
+    <div id="bfire" class="btn">Скопировать очаг (fire)</div>
+  </div>
+  <div class="small">Подсказка: можно тапнуть по булавке и скопировать координаты из попапа.</div>
+</div>
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script>
+const MODE    = "__MODE__";
+const CONTACT = "__CONTACT__";
+const map = L.map('map').setView([__LAT__, __LON__], __ZOOM__);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+const marker = L.marker([__LAT__, __LON__], {draggable:true}).addTo(map);
+
+const $coords = document.getElementById('coords');
+const $contact = document.getElementById('contact');
+const $out = document.getElementById('out');
+const $bvol = document.getElementById('bvol');
+const $bfire = document.getElementById('bfire');
+
+$contact.value = CONTACT || "";
+if (MODE === "fire") $bfire.classList.add("active"); else $bvol.classList.add("active");
+
+function fmt(v){ return (Math.round(v*1e6)/1e6).toFixed(6); }
+function build(mode){
+  const ll = marker.getLatLng();
+  const contact = $contact.value.trim();
+  const head = mode === "fire" ? `fire ${fmt(ll.lat)},${fmt(ll.lng)}` : `${fmt(ll.lat)},${fmt(ll.lng)}`;
+  const tail = contact ? ` ${contact}` : "";
+  return head + tail + (mode === "fire" ? " дым" : " заметка");
+}
+function update(){
+  const ll = marker.getLatLng();
+  $coords.textContent = fmt(ll.lat) + ", " + fmt(ll.lng);
+  $out.value = build(MODE);
+}
+marker.on('drag', update); marker.on('dragend', update); update();
+$contact.addEventListener('input', ()=>{ $out.value = build(MODE); });
+
+async function copyText(text){
+  try { await navigator.clipboard.writeText(text); alert("Скопировано"); }
+  catch(e) { $out.select(); $out.setSelectionRange(0, 99999); }
+}
+$bvol.onclick = ()=>{ $bfire.classList.remove("active"); $bvol.classList.add("active"); $out.value = build("vol"); copyText($out.value); };
+$bfire.onclick = ()=>{ $bvol.classList.remove("active"); $bfire.classList.add("active"); $out.value = build("fire"); copyText($out.value); };
+
+// --- popup copy on marker ---
+function coordsText() {
+  const ll = marker.getLatLng();
+  return fmt(ll.lat)+','+fmt(ll.lng);
+}
+async function copyCoordsOnly(){
+  const t = coordsText();
+  try { await navigator.clipboard.writeText(t); alert("Координаты скопированы"); }
+  catch(e){
+    const ta=document.createElement('textarea'); ta.value=t; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.focus(); ta.select(); try{document.execCommand('copy'); alert("Координаты скопированы");}catch(_){ alert("Скопируйте вручную: "+t); } document.body.removeChild(ta);
+  }
+}
+function popupHtml() {
+  const c = coordsText();
+  return `<div style="min-width:180px"><b>Координаты</b><br>${c}<br><a href="javascript:void(0)" onclick="copyCoordsOnly()" class="btn" style="display:inline-block">Скопировать</a></div>`;
+}
+function openPopup() { marker.bindPopup(popupHtml(), {autoPan:true}).openPopup(); }
+marker.on('dragend', openPopup);
+marker.on('click', openPopup);
+map.on('click', (e)=>{ marker.setLatLng(e.latlng); openPopup(); update(); });
+openPopup();
+</script>
+</body>
+</html>

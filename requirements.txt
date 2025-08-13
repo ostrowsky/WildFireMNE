@@ -1,0 +1,5 @@
+fastapi
+uvicorn[standard]
+aiogram==3.*
+python-dotenv
+requests
