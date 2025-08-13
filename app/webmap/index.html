@@ -28,8 +28,8 @@
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
-const DEFAULT_CENTER = [42.179, 18.942];
-const DEFAULT_ZOOM   = 12;
+const DEFAULT_CENTER = [__LAT__, __LON__];
+const DEFAULT_ZOOM   = __ZOOM__;
 const AUTO_REFRESH_MS = 30000;
 
 const urlParams = new URLSearchParams(location.search);
@@ -72,15 +72,6 @@ function contactHtml(c){
   return ` · ${c}`;
 }
 
-function markerFor(feature){
-  const typ = feature.properties.type;
-  const color = (typ === 'fire') ? '#e53935' : '#1e88e5';
-  return L.circleMarker(
-    [feature.geometry.coordinates[1], feature.geometry.coordinates[0]],
-    { radius: 8, color, weight: 2, fillColor: color, fillOpacity: 0.6 }
-  );
-}
-
 function popupHtml(feature){
   const pr = feature.properties;
   const lat = feature.geometry.coordinates[1];
@@ -99,6 +90,14 @@ function popupHtml(feature){
         <a class="btn" href="#" onclick="copyText('${coordsText.replace(/\s/g,'')}');return false;">Скопировать</a>
       </div>
   `;
+
+  if (pr.photo_file_id) {
+    html += `
+      <div style="margin-top:8px">
+        <img src="/photo/${pr.photo_file_id}" alt="photo" style="max-width:100%;border-radius:8px"/>
+      </div>
+    `;
+  }
 
   if(uid && sig && pr.user_id && String(pr.user_id) === uid){
     html += `
@@ -154,7 +153,6 @@ async function refresh(){
     }
   }catch(e){
     console.error("refresh failed", e);
-    // Если ошибка — просто центрируем карту
     map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
   }
 }
