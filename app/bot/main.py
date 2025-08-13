@@ -14,7 +14,6 @@ from aiogram.types import (
 )
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from aiogram.filters import Text
 from dotenv import load_dotenv
 
 from .storage import (
@@ -302,7 +301,8 @@ async def live_update(msg: Message):
         lat=loc.latitude, lon=loc.longitude
     )
 
-@dp.message(Text(equals="stop", ignore_case=True))
+# <-- ВОТ ЭТА СТРОКА ИСПРАВЛЕНА: без Text, через regexp -->
+@dp.message(F.text.regexp(r'(?i)^stop$'))
 async def live_stop_cmd(msg: Message):
     stop_live(msg.chat.id, msg.message_id)
     await msg.answer("Live tracking stopped for the last message.", reply_markup=MAIN_KB)
