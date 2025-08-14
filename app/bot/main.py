@@ -33,6 +33,14 @@ MAP_URL = os.getenv("MAP_URL", "").strip()
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me").encode()
 PORT = int(os.getenv("PORT", "8080"))  # Railway
 
+# Satellite hotspots (NASA FIRMS)
+HOTSPOTS_URL = os.getenv("HOTSPOTS_URL", "").strip()
+HOTSPOTS_REFRESH_SEC = int(os.getenv("HOTSPOTS_REFRESH_SEC", "300"))
+HOTSPOTS_CACHE_SEC = int(os.getenv("HOTSPOTS_CACHE_SEC", "300"))
+
+# Montenegro bbox (rough)
+MNE_BBOX = {"min_lon": 18.3, "min_lat": 41.8, "max_lon": 20.4, "max_lat": 43.6}
+
 WEBMAP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "webmap"))
 
 # ========== LOG ==========
@@ -92,9 +100,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def _on_startup():
-    init_db()
-    migrate()
-    log.info("DB ready")
+    init_db(); migrate(); log.info("DB ready")
 
 @app.get("/", response_class=HTMLResponse)
 def index():
@@ -163,6 +169,66 @@ async def photo(file_id: str):
     except Exception:
         log.exception("photo proxy failed")
         raise HTTPException(status_code=500, detail="photo proxy error")
+
+# ----------- Satellite hotspots proxy (GeoJSON) -----------
+_hotspots_cache = {"ts": 0, "data": None}
+
+def _in_mne_bbox(lat: float, lon: float) -> bool:
+    return (MNE_BBOX["min_lat"] <= lat <= MNE_BBOX["max_lat"] and
+            MNE_BBOX["min_lon"] <= lon <= MNE_BBOX["max_lon"])
+
+@app.get("/hotspots")
+async def hotspots():
+    """
+    Proxies a public GeoJSON with active fire points, filters to Montenegro bbox,
+    caches for HOTSPOTS_CACHE_SEC seconds.
+    """
+    if not HOTSPOTS_URL:
+        return JSONResponse({"type": "FeatureCollection", "features": []})
+
+    now = time.time()
+    if _hotspots_cache["data"] and (now - _hotspots_cache["ts"] < HOTSPOTS_CACHE_SEC):
+        return JSONResponse(_hotspots_cache["data"])
+
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as s:
+            async with s.get(HOTSPOTS_URL) as r:
+                if r.status != 200:
+                    log.warning("Hotspots fetch failed: %s", r.status)
+                    return JSONResponse({"type": "FeatureCollection", "features": []})
+                gj = await r.json()
+
+        feats = []
+        for f in (gj.get("features") or []):
+            try:
+                geom = f.get("geometry") or {}
+                if geom.get("type") != "Point":
+                    continue
+                coords = geom.get("coordinates") or []
+                lon, lat = float(coords[0]), float(coords[1])
+                if not _in_mne_bbox(lat, lon):
+                    continue
+                props = f.get("properties") or {}
+                feats.append({
+                    "type": "Feature",
+                    "geometry": {"type":"Point","coordinates":[lon,lat]},
+                    "properties": {
+                        "acq_date": props.get("acq_date") or props.get("acqDate") or "",
+                        "acq_time": props.get("acq_time") or props.get("acqTime") or "",
+                        "brightness": props.get("bright_ti4") or props.get("brightness") or None,
+                        "frp": props.get("frp") or None
+                    }
+                })
+            except Exception:
+                continue
+
+        data = {"type": "FeatureCollection", "features": feats}
+        _hotspots_cache["ts"] = now
+        _hotspots_cache["data"] = data
+        return JSONResponse(data)
+    except Exception:
+        log.exception("hotspots proxy error")
+        return JSONResponse({"type": "FeatureCollection", "features": []})
 
 # ========== TELEGRAM BOT ==========
 BTN_SEND_POINT   = "📍 Send Current Volunteer Location"
@@ -301,7 +367,6 @@ async def live_update(msg: Message):
         lat=loc.latitude, lon=loc.longitude
     )
 
-# <-- ВОТ ЭТА СТРОКА ИСПРАВЛЕНА: без Text, через regexp -->
 @dp.message(F.text.regexp(r'(?i)^stop$'))
 async def live_stop_cmd(msg: Message):
     stop_live(msg.chat.id, msg.message_id)
