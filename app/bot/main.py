@@ -322,6 +322,33 @@ async def hotspots_debug():
         "cache_sec": HOTSPOTS_CACHE_SEC
     })
 
+@app.get("/hotspots/probe")
+async def hotspots_probe():
+    import traceback
+    results = []
+    urls = [u for u in HOTSPOTS_URLS if u]
+    if not urls:
+        return JSONResponse({"sources": [], "note": "HOTSPOTS_URLS is empty"})
+
+    timeout = aiohttp.ClientTimeout(total=25)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for url in urls:
+            rec = {"url": url, "status": None, "features": None, "error": None}
+            try:
+                async with session.get(url, headers={"Accept": "application/json"}) as r:
+                    rec["status"] = r.status
+                    if r.status == 200:
+                        gj = await r.json()
+                        feats = (gj.get("features") or []) if isinstance(gj, dict) else []
+                        rec["features"] = len(feats)
+                    else:
+                        rec["error"] = (await r.text())[:300]
+            except Exception as e:
+                rec["error"] = f"{type(e).__name__}: {e}"
+            results.append(rec)
+    return JSONResponse({"sources": results})
+
+
 
 # ===================== TELEGRAM BOT =====================
 BTN_SEND_POINT   = "📍 Send Current Volunteer Location"
