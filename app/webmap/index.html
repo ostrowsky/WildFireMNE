@@ -13,7 +13,7 @@
     }
     .legend b{ display:block; margin-bottom:6px;}
     .pill { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
-    .red{ background:#e53935; } .blue{ background:#1e88e5; }
+    .red{ background:#e53935; } .blue{ background:#1e88e5; } .orange{ background:#fb8c00; }
     .btn { display:inline-block; padding:6px 10px; border:1px solid #ddd; border-radius:6px; cursor:pointer; text-decoration:none; }
     .btn:active{ background:#eee; }
   </style>
@@ -22,15 +22,19 @@
 <div id="map"></div>
 <div class="legend">
   <b>Legend</b>
-  <div><span class="pill red"></span>Fire (red)</div>
-  <div><span class="pill blue"></span>Volunteer (blue)</div>
+  <div><span class="pill red"></span>Fire (reported)</div>
+  <div><span class="pill blue"></span>Volunteer</div>
+  <div><span class="pill orange"></span>Satellite hotspot</div>
 </div>
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<!-- heatmap plugin -->
+<script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
 <script>
 const DEFAULT_CENTER = [__LAT__, __LON__];
 const DEFAULT_ZOOM   = __ZOOM__;
 const AUTO_REFRESH_MS = 10000;
+const HOTSPOTS_REFRESH_MS = 120000; // 2 min
 
 const urlParams = new URLSearchParams(location.search);
 const focusId = urlParams.get("focus");
@@ -39,9 +43,12 @@ const sig = urlParams.get("sig");
 
 const map = L.map('map', { zoomControl: true }).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
 let geoLayer = null;
+let hotspotsLayer = null;
+let heatLayer = null;
 
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
 
+// --- helpers
 function fmtTS(ts){
   if(!ts) return '';
   const d = new Date(ts*1000);
@@ -118,6 +125,7 @@ async function delEvent(id){
   }catch(e){ console.error(e); alert('Network error'); }
 }
 
+// --- our bot data
 async function refresh(){
   try{
     const r = await fetch('/geojson', {cache:'no-store'});
@@ -153,8 +161,77 @@ async function refresh(){
   }
 }
 
+// --- satellite hotspots (points + heatmap)
+async function refreshHotspots(){
+  try{
+    const r = await fetch('/hotspots', {cache:'no-store'});
+    const gj = await r.json();
+
+    if(hotspotsLayer){ hotspotsLayer.remove(); hotspotsLayer = null; }
+    if(heatLayer){ heatLayer.remove(); heatLayer = null; }
+
+    // points
+    hotspotsLayer = L.geoJSON(gj, {
+      pointToLayer: (f, latlng) => L.circleMarker(latlng, {radius:6, color:'#fb8c00', fillColor:'#fb8c00', fillOpacity:0.7, weight:1}),
+      onEachFeature: (f, layer) => {
+        const p = f.properties || {};
+        const lat = f.geometry.coordinates[1];
+        const lon = f.geometry.coordinates[0];
+        const t  = (p.acq_date || '') + (p.acq_time ? ` ${p.acq_time}` : '');
+        const info = `
+          <div style="min-width:200px">
+            <b>🔥 Satellite hotspot</b><br>
+            ${t}<br>
+            ${p.brightness ? `Brightness: ${p.brightness}<br>` : ``}
+            ${p.frp ? `FRP: ${p.frp}<br>` : ``}
+            <a class="btn" href="https://maps.google.com/?q=${lat},${lon}" target="_blank">Google Maps</a>
+          </div>`;
+        layer.bindPopup(info);
+      }
+    });
+
+    // heatmap
+    try{
+      const pts = (gj.features||[]).map(f => [f.geometry.coordinates[1], f.geometry.coordinates[0], 0.8]);
+      if(pts.length){
+        heatLayer = L.heatLayer(pts, {radius: 18, blur: 16, maxZoom: 14});
+      }
+    }catch(e){ console.warn("heat layer error", e); }
+
+    hotspotsLayer.addTo(map);
+    if(heatLayer) heatLayer.addTo(map);
+
+    // layers control
+    if(!window._layersCtl){
+      window._layersCtl = L.control.layers(
+        {"OSM": osm},
+        {
+          "🔥 Satellite Hotspots (points)": hotspotsLayer,
+          "🔥 Heatmap (satellite)": heatLayer
+        },
+        {collapsed: false}
+      ).addTo(map);
+    }else{
+      window._layersCtl.remove();
+      window._layersCtl = L.control.layers(
+        {"OSM": osm},
+        {
+          "🔥 Satellite Hotspots (points)": hotspotsLayer,
+          "🔥 Heatmap (satellite)": heatLayer
+        },
+        {collapsed: false}
+      ).addTo(map);
+    }
+  }catch(e){
+    console.error("hotspots refresh failed", e);
+  }
+}
+
 refresh();
 setInterval(refresh, AUTO_REFRESH_MS);
+
+refreshHotspots();
+setInterval(refreshHotspots, HOTSPOTS_REFRESH_MS);
 </script>
 </body>
 </html>
