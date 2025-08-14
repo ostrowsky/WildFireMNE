@@ -1,5 +1,10 @@
 from __future__ import annotations
-import os, hmac, time, asyncio, logging, aiohttp
+import os
+import hmac
+import time
+import asyncio
+import logging
+import aiohttp
 from hashlib import sha256
 from urllib.parse import urlparse, quote_plus
 
@@ -22,32 +27,48 @@ from .storage import (
     upsert_live_event, update_live_coords, stop_live
 )
 
-# ========== ENV ==========
+# ===================== ENV =====================
 load_dotenv()
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
+
+# Map defaults (Buljarica approx)
 CENTER_LAT = float(os.getenv("CENTER_LAT", "42.179"))
 CENTER_LON = float(os.getenv("CENTER_LON", "18.942"))
 CENTER_ZOOM = int(os.getenv("CENTER_ZOOM", "12"))
+
+# Public base URL (Railway)
 BASE_URL = os.getenv("BASE_URL", "").strip()
 MAP_URL = os.getenv("MAP_URL", "").strip()
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me").encode()
-PORT = int(os.getenv("PORT", "8080"))  # Railway
 
-# Satellite hotspots (NASA FIRMS)
-HOTSPOTS_URL = os.getenv("HOTSPOTS_URL", "").strip()
+# Signature for delete links
+SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me").encode()
+
+# Railway passes PORT
+PORT = int(os.getenv("PORT", "8080"))
+
+# ---------- NASA FIRMS API (spatial hotspots) ----------
+NASA_API_KEY = os.getenv("NASA_API_KEY", "").strip()
+# source: viirs-snpp-npp | viirs-noaa-20 | modis
+FIRMS_SOURCE = os.getenv("FIRMS_SOURCE", "viirs-snpp-npp").strip().lower()
+# region: Europe (covers Montenegro)
+FIRMS_REGION = os.getenv("FIRMS_REGION", "Europe").strip()
+# window: 24h | 48h | 7d
+FIRMS_WINDOW = os.getenv("FIRMS_WINDOW", "24h").strip()
+# caching
 HOTSPOTS_REFRESH_SEC = int(os.getenv("HOTSPOTS_REFRESH_SEC", "300"))
 HOTSPOTS_CACHE_SEC = int(os.getenv("HOTSPOTS_CACHE_SEC", "300"))
 
-# Montenegro bbox (rough)
+# Montenegro bbox
 MNE_BBOX = {"min_lon": 18.3, "min_lat": 41.8, "max_lon": 20.4, "max_lat": 43.6}
 
 WEBMAP_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "webmap"))
 
-# ========== LOG ==========
+# ===================== LOG =====================
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("app")
 
-# ========== HELPERS ==========
+# ===================== HELPERS =====================
 def _is_public_http(url: str) -> bool:
     if not url:
         return False
@@ -91,7 +112,7 @@ def _map_button(user_id: int | None = None) -> InlineKeyboardMarkup | None:
         inline_keyboard=[[InlineKeyboardButton(text="🌍 View Live Map", url=url)]]
     )
 
-# ========== FASTAPI ==========
+# ===================== FASTAPI APP =====================
 app = FastAPI(title="Wildfire MVP")
 app.add_middleware(
     CORSMiddleware,
@@ -100,7 +121,9 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def _on_startup():
-    init_db(); migrate(); log.info("DB ready")
+    init_db()
+    migrate()
+    log.info("DB ready")
 
 @app.get("/", response_class=HTMLResponse)
 def index():
@@ -146,7 +169,7 @@ def delete_event(event_id: int, uid: int, sig: str):
         raise HTTPException(status_code=404, detail="not found or not owner")
     return JSONResponse({"deleted": True, "id": event_id})
 
-# Telegram photo proxy
+# Telegram photo proxy (serves images uploaded as fire photos)
 @app.get("/photo/{file_id}")
 async def photo(file_id: str):
     if not TELEGRAM_TOKEN:
@@ -170,7 +193,7 @@ async def photo(file_id: str):
         log.exception("photo proxy failed")
         raise HTTPException(status_code=500, detail="photo proxy error")
 
-# ----------- Satellite hotspots proxy (GeoJSON) -----------
+# ----------- Satellite hotspots (NASA FIRMS API v1) -----------
 _hotspots_cache = {"ts": 0, "data": None}
 
 def _in_mne_bbox(lat: float, lon: float) -> bool:
@@ -180,43 +203,49 @@ def _in_mne_bbox(lat: float, lon: float) -> bool:
 @app.get("/hotspots")
 async def hotspots():
     """
-    Proxies a public GeoJSON with active fire points, filters to Montenegro bbox,
-    caches for HOTSPOTS_CACHE_SEC seconds.
+    Pull active fires from FIRMS API v1 (area/json), filter by Montenegro bbox,
+    cache for HOTSPOTS_CACHE_SEC seconds. Returns GeoJSON FeatureCollection.
     """
-    if not HOTSPOTS_URL:
+    if not NASA_API_KEY:
+        log.warning("NASA_API_KEY is not set; /hotspots returns empty")
         return JSONResponse({"type": "FeatureCollection", "features": []})
 
     now = time.time()
     if _hotspots_cache["data"] and (now - _hotspots_cache["ts"] < HOTSPOTS_CACHE_SEC):
         return JSONResponse(_hotspots_cache["data"])
 
+    base = "https://firms.modaps.eosdis.nasa.gov/api/area/json"
+    url = f"{base}/{FIRMS_SOURCE}/{FIRMS_REGION}/{FIRMS_WINDOW}?key={NASA_API_KEY}"
+
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as s:
-            async with s.get(HOTSPOTS_URL) as r:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as s:
+            async with s.get(url) as r:
                 if r.status != 200:
-                    log.warning("Hotspots fetch failed: %s", r.status)
+                    txt = await r.text()
+                    log.warning("FIRMS API error %s: %s", r.status, txt[:200])
                     return JSONResponse({"type": "FeatureCollection", "features": []})
-                gj = await r.json()
+                rows = await r.json()  # list of dicts
 
         feats = []
-        for f in (gj.get("features") or []):
+        for row in rows or []:
             try:
-                geom = f.get("geometry") or {}
-                if geom.get("type") != "Point":
-                    continue
-                coords = geom.get("coordinates") or []
-                lon, lat = float(coords[0]), float(coords[1])
+                lat = float(row.get("latitude"))
+                lon = float(row.get("longitude"))
                 if not _in_mne_bbox(lat, lon):
                     continue
-                props = f.get("properties") or {}
+                acq_date = (row.get("acq_date") or "").strip()
+                acq_time = (row.get("acq_time") or "").strip()
+                frp = row.get("frp")
+                bright = row.get("bright_ti4") or row.get("brightness")
+
                 feats.append({
                     "type": "Feature",
-                    "geometry": {"type":"Point","coordinates":[lon,lat]},
+                    "geometry": {"type": "Point", "coordinates": [lon, lat]},
                     "properties": {
-                        "acq_date": props.get("acq_date") or props.get("acqDate") or "",
-                        "acq_time": props.get("acq_time") or props.get("acqTime") or "",
-                        "brightness": props.get("bright_ti4") or props.get("brightness") or None,
-                        "frp": props.get("frp") or None
+                        "acq_date": acq_date,
+                        "acq_time": acq_time,
+                        "brightness": bright,
+                        "frp": frp
                     }
                 })
             except Exception:
@@ -225,12 +254,14 @@ async def hotspots():
         data = {"type": "FeatureCollection", "features": feats}
         _hotspots_cache["ts"] = now
         _hotspots_cache["data"] = data
+        log.info("FIRMS hotspots: %d features in bbox", len(feats))
         return JSONResponse(data)
+
     except Exception:
-        log.exception("hotspots proxy error")
+        log.exception("hotspots proxy error (FIRMS)")
         return JSONResponse({"type": "FeatureCollection", "features": []})
 
-# ========== TELEGRAM BOT ==========
+# ===================== TELEGRAM BOT =====================
 BTN_SEND_POINT   = "📍 Send Current Volunteer Location"
 BTN_LIVE_TRACK   = "🛰 Share Live Volunteer Location"
 BTN_REPORT_FIRE  = "🔥 Report Fire"
@@ -248,8 +279,8 @@ MAIN_KB = ReplyKeyboardMarkup(
     resize_keyboard=True, is_persistent=True
 )
 
-_user_mode: dict[int, tuple[str, int]] = {}
-_last_loc: dict[int, tuple[float, float, int]] = {}
+_user_mode: dict[int, tuple[str, int]] = {}      # uid -> (mode, ts)
+_last_loc: dict[int, tuple[float, float, int]] = {}  # uid -> (lat, lon, ts)
 
 def cancel_mode(uid:int):
     _user_mode.pop(uid, None)
@@ -455,7 +486,7 @@ async def got_photo(msg: Message):
     if kb:
         await msg.answer("Open the live map:", reply_markup=kb)
 
-# ---------- polling ----------
+# ---------- start polling ----------
 async def _run_bot():
     if not TELEGRAM_TOKEN:
         return
