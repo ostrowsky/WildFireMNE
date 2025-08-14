@@ -2,6 +2,7 @@ from __future__ import annotations
 import os
 import hmac
 import time
+import json
 import asyncio
 import logging
 import aiohttp
@@ -37,27 +38,32 @@ CENTER_LAT = float(os.getenv("CENTER_LAT", "42.179"))
 CENTER_LON = float(os.getenv("CENTER_LON", "18.942"))
 CENTER_ZOOM = int(os.getenv("CENTER_ZOOM", "12"))
 
-# Public base URL (Railway)
+# Public base URL
 BASE_URL = os.getenv("BASE_URL", "").strip()
 MAP_URL = os.getenv("MAP_URL", "").strip()
 
 # Signature for delete links
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me").encode()
 
-# Railway passes PORT
+# Railway passes PORT (fallback for local)
 PORT = int(os.getenv("PORT", "8080"))
 
-# ---------- NASA FIRMS API (spatial hotspots) ----------
-NASA_API_KEY = os.getenv("NASA_API_KEY", "").strip()
-# source: viirs-snpp-npp | viirs-noaa-20 | modis
-FIRMS_SOURCE = os.getenv("FIRMS_SOURCE", "viirs-snpp-npp").strip().lower()
-# region: Europe (covers Montenegro)
-FIRMS_REGION = os.getenv("FIRMS_REGION", "Europe").strip()
-# window: 24h | 48h | 7d
-FIRMS_WINDOW = os.getenv("FIRMS_WINDOW", "24h").strip()
-# caching
-HOTSPOTS_REFRESH_SEC = int(os.getenv("HOTSPOTS_REFRESH_SEC", "300"))
+# -------- Hotspots via external GeoJSON (e.g., FIRMS WFS) --------
+HOTSPOTS_URLS = os.getenv("HOTSPOTS_URLS", "[]")
+try:
+    HOTSPOTS_URLS = json.loads(HOTSPOTS_URLS)
+    if not isinstance(HOTSPOTS_URLS, list):
+        HOTSPOTS_URLS = []
+except Exception:
+    HOTSPOTS_URLS = [u.strip() for u in HOTSPOTS_URLS.split(",") if u.strip()]
+
 HOTSPOTS_CACHE_SEC = int(os.getenv("HOTSPOTS_CACHE_SEC", "300"))
+
+# ---- Optional fallback: NASA FIRMS API v1 (requires key) ----
+NASA_API_KEY = os.getenv("NASA_API_KEY", "").strip()
+FIRMS_SOURCE = os.getenv("FIRMS_SOURCE", "viirs-snpp-npp").strip().lower()  # viirs-snpp-npp | viirs-noaa-20 | modis
+FIRMS_REGION = os.getenv("FIRMS_REGION", "Europe").strip()
+FIRMS_WINDOW = os.getenv("FIRMS_WINDOW", "24h").strip()  # 24h | 48h | 7d
 
 # Montenegro bbox
 MNE_BBOX = {"min_lon": 18.3, "min_lat": 41.8, "max_lon": 20.4, "max_lat": 43.6}
@@ -193,40 +199,72 @@ async def photo(file_id: str):
         log.exception("photo proxy failed")
         raise HTTPException(status_code=500, detail="photo proxy error")
 
-# ----------- Satellite hotspots (NASA FIRMS API v1) -----------
+# ----------- Hotspots (GeoJSON URLs + fallback FIRMS API) -----------
 _hotspots_cache = {"ts": 0, "data": None}
 
 def _in_mne_bbox(lat: float, lon: float) -> bool:
     return (MNE_BBOX["min_lat"] <= lat <= MNE_BBOX["max_lat"] and
             MNE_BBOX["min_lon"] <= lon <= MNE_BBOX["max_lon"])
 
-@app.get("/hotspots")
-async def hotspots():
-    """
-    Pull active fires from FIRMS API v1 (area/json), filter by Montenegro bbox,
-    cache for HOTSPOTS_CACHE_SEC seconds. Returns GeoJSON FeatureCollection.
-    """
+async def _hotspots_from_urls() -> dict:
+    """Download & merge FeatureCollections from HOTSPOTS_URLS."""
+    urls = [u for u in HOTSPOTS_URLS if u]
+    feats: list[dict] = []
+    if not urls:
+        return {"type": "FeatureCollection", "features": feats}
+
+    timeout = aiohttp.ClientTimeout(total=25)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for url in urls:
+            try:
+                async with session.get(url, headers={"Accept": "application/json"}) as r:
+                    if r.status != 200:
+                        txt = (await r.text())[:300]
+                        log.warning("hotspots: fetch %s -> %s %s", url, r.status, txt)
+                        continue
+                    gj = await r.json()
+                    src_feats = (gj.get("features") or []) if isinstance(gj, dict) else []
+                    for f in src_feats:
+                        try:
+                            geom = f.get("geometry") or {}
+                            if geom.get("type") != "Point":
+                                continue
+                            coords = geom.get("coordinates") or []
+                            if len(coords) < 2:
+                                continue
+                            lon, lat = float(coords[0]), float(coords[1])
+                            if not _in_mne_bbox(lat, lon):
+                                continue
+                            props = f.get("properties") or {}
+                            feats.append({
+                                "type": "Feature",
+                                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                                "properties": {**props}
+                            })
+                        except Exception:
+                            continue
+            except Exception as e:
+                log.warning("hotspots: error fetching %s: %s", url, e)
+
+    log.info("hotspots: merged %d features from %d sources", len(feats), len(urls))
+    return {"type": "FeatureCollection", "features": feats}
+
+async def _hotspots_from_firms_api() -> dict:
+    """Fallback: NASA FIRMS API v1 (area/json)."""
     if not NASA_API_KEY:
-        log.warning("NASA_API_KEY is not set; /hotspots returns empty")
-        return JSONResponse({"type": "FeatureCollection", "features": []})
-
-    now = time.time()
-    if _hotspots_cache["data"] and (now - _hotspots_cache["ts"] < HOTSPOTS_CACHE_SEC):
-        return JSONResponse(_hotspots_cache["data"])
-
+        return {"type": "FeatureCollection", "features": []}
     base = "https://firms.modaps.eosdis.nasa.gov/api/area/json"
     url = f"{base}/{FIRMS_SOURCE}/{FIRMS_REGION}/{FIRMS_WINDOW}?key={NASA_API_KEY}"
-
+    feats: list[dict] = []
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=25)) as s:
             async with s.get(url) as r:
                 if r.status != 200:
                     txt = await r.text()
                     log.warning("FIRMS API error %s: %s", r.status, txt[:200])
-                    return JSONResponse({"type": "FeatureCollection", "features": []})
+                    return {"type": "FeatureCollection", "features": []}
                 rows = await r.json()  # list of dicts
 
-        feats = []
         for row in rows or []:
             try:
                 lat = float(row.get("latitude"))
@@ -237,7 +275,6 @@ async def hotspots():
                 acq_time = (row.get("acq_time") or "").strip()
                 frp = row.get("frp")
                 bright = row.get("bright_ti4") or row.get("brightness")
-
                 feats.append({
                     "type": "Feature",
                     "geometry": {"type": "Point", "coordinates": [lon, lat]},
@@ -250,16 +287,31 @@ async def hotspots():
                 })
             except Exception:
                 continue
-
-        data = {"type": "FeatureCollection", "features": feats}
-        _hotspots_cache["ts"] = now
-        _hotspots_cache["data"] = data
-        log.info("FIRMS hotspots: %d features in bbox", len(feats))
-        return JSONResponse(data)
-
+        log.info("FIRMS API v1 hotspots: %d features in bbox", len(feats))
+        return {"type": "FeatureCollection", "features": feats}
     except Exception:
-        log.exception("hotspots proxy error (FIRMS)")
-        return JSONResponse({"type": "FeatureCollection", "features": []})
+        log.exception("hotspots (FIRMS API) failed")
+        return {"type": "FeatureCollection", "features": []}
+
+@app.get("/hotspots")
+async def hotspots():
+    """
+    Aggregates hotspots:
+      1) from HOTSPOTS_URLS (GeoJSON FeatureCollection, e.g., FIRMS WFS),
+      2) if empty/absent, fallback to NASA FIRMS API v1 (with NASA_API_KEY).
+    Filters to Montenegro bbox and caches for HOTSPOTS_CACHE_SEC seconds.
+    """
+    now = time.time()
+    if _hotspots_cache["data"] and (now - _hotspots_cache["ts"] < HOTSPOTS_CACHE_SEC):
+        return JSONResponse(_hotspots_cache["data"])
+
+    data = await _hotspots_from_urls()
+    if not data.get("features"):
+        data = await _hotspots_from_firms_api()
+
+    _hotspots_cache["ts"] = now
+    _hotspots_cache["data"] = data
+    return JSONResponse(data)
 
 # ===================== TELEGRAM BOT =====================
 BTN_SEND_POINT   = "📍 Send Current Volunteer Location"
