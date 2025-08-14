@@ -313,6 +313,16 @@ async def hotspots():
     _hotspots_cache["data"] = data
     return JSONResponse(data)
 
+@app.get("/hotspots/debug")
+async def hotspots_debug():
+    return JSONResponse({
+        "parsed_urls": HOTSPOTS_URLS,
+        "use_fallback_firms_api": bool(NASA_API_KEY and not HOTSPOTS_URLS),
+        "bbox": MNE_BBOX,
+        "cache_sec": HOTSPOTS_CACHE_SEC
+    })
+
+
 # ===================== TELEGRAM BOT =====================
 BTN_SEND_POINT   = "📍 Send Current Volunteer Location"
 BTN_LIVE_TRACK   = "🛰 Share Live Volunteer Location"
