@@ -1,50 +1,71 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>Pick a Point</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
+  <meta charset="utf-8" />
+  <title>Pick a point</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <style>
     html, body, #map { height: 100%; margin: 0; }
-    .panel { position:absolute; left:8px; right:8px; bottom:8px; background:rgba(255,255,255,.96);
-             padding:10px; border-radius:10px; font:14px/1.2 system-ui, Arial; box-shadow:0 2px 10px rgba(0,0,0,.1);}
-    .row { display:flex; gap:8px; margin-top:6px; }
-    .btn { flex:1; padding:10px; text-align:center; border:1px solid #ddd; border-radius:8px; cursor:pointer; user-select:none; }
-    .btn:active { background:#eee; }
-    .small { font-size:12px; opacity:.7; }
-    input, textarea { width:100%; padding:8px; border:1px solid #ddd; border-radius:8px; }
-    textarea { height:56px; }
-    .active { border-color:#06c; }
+    .panel {
+      position: absolute; left: 10px; bottom: 10px; right: 10px; background:#fff; padding:10px 12px;
+      border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.1); font: 14px/1.2 system-ui, Arial;
+    }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    .btn { display:inline-block; padding:6px 10px; border:1px solid #ddd; border-radius:6px; cursor:pointer; text-decoration:none; }
+    .btn:active{ background:#eee; }
   </style>
 </head>
 <body>
 <div id="map"></div>
 <div class="panel">
   <div>Coordinates: <b id="coords"></b></div>
-  <div style="margin-top:6px">Contact (optional): <input id="contact"></div>
-  <div style="margin-top:6px">Message to paste into the bot chat: <textarea id="out" readonly></textarea></div>
-  <div class="row">
-    <div id="bvol" class="btn">Copy Volunteer</div>
-    <div id="bfire" class="btn">Copy Fire (fire)</div>
+  <div class="row" style="margin-top:8px">
+    <a class="btn" id="copyVol">Copy as Volunteer</a>
+    <a class="btn" id="copyFire">Copy as Fire</a>
   </div>
-  <div class="small">Paste the copied text back into the bot chat.</div>
+  <div style="opacity:.7; margin-top:6px">Paste the copied text into the bot chat.</div>
 </div>
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
-const MODE    = "__MODE__";     // "vol" | "fire"
+const MAP_KEY = "__MAP_KEY__";
+const MODE = "__MODE__";  // "vol" or "fire"
 const CONTACT = "__CONTACT__";
+const startLat = __LAT__;
+const startLon = __LON__;
+const startZoom = __ZOOM__;
 
-const map = L.map('map').setView([__LAT__, __LON__], __ZOOM__);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
+const map = L.map('map', { zoomControl: true });
 
-const marker = L.marker([__LAT__, __LON__], {draggable:true}).addTo(map);
+if (MAP_KEY && MAP_KEY !== "__MAP_KEY__") {
+  L.tileLayer(
+    `https://api.maptiler.com/maps/streets-v2/256/{z}/{x}/{y}.png?key=${MAP_KEY}`,
+    { maxZoom: 20, attribution: '&copy; OSM & MapTiler' }
+  ).addTo(map);
+} else {
+  L.tileLayer(
+    'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    { maxZoom: 19, attribution: '&copy; OpenStreetMap' }
+  ).addTo(map);
+}
+
+const pin = L.marker([startLat, startLon], { draggable: true }).addTo(map);
+map.setView([startLat, startLon], startZoom);
+
+const $coords = document.getElementById('coords');
+const $copyVol = document.getElementById('copyVol');
+const $copyFire = document.getElementById('copyFire');
 
 function fmt(v){ return (Math.round(v*1e6)/1e6).toFixed(6); }
-function coords(){ const ll = marker.getLatLng(); return `${fmt(ll.lat)}, ${fmt(ll.lng)}`; }
+function updateLabel(){
+  const {lat, lng} = pin.getLatLng();
+  $coords.textContent = `${fmt(lat)}, ${fmt(lng)}`;
+}
+pin.on('move', updateLabel);
+updateLabel();
 
-async function copyToClipboard(t){
+async function copy(t){
   try{ await navigator.clipboard.writeText(t); alert("Copied"); }
   catch(e){
     const ta = document.createElement('textarea'); ta.value=t; ta.style.position='fixed'; ta.style.opacity='0';
@@ -54,46 +75,20 @@ async function copyToClipboard(t){
   }
 }
 
-function popupHtml(){
-  const c = coords();
-  return `
-    <div style="min-width:180px">
-      <b>Coordinates</b><br>${c}<br>
-      <button onclick="copyToClipboard('${c.replace(/\s/g,'')}')" 
-              style="margin-top:6px;padding:6px 10px;border:1px solid #ddd;border-radius:6px;cursor:pointer;">
-        Copy Coordinates
-      </button>
-    </div>`;
+$copyVol.onclick = () => {
+  const {lat, lng} = pin.getLatLng();
+  const text = `${fmt(lat)} ${fmt(lng)} ${CONTACT||""}`.trim();
+  copy(text);
+};
+$copyFire.onclick = () => {
+  const {lat, lng} = pin.getLatLng();
+  const text = `fire ${fmt(lat)} ${fmt(lng)} ${CONTACT||""}`.trim();
+  copy(text);
+};
+
+if (MODE === "fire") {
+  // можно подсветить рамкой/цветом, но оставим просто режим
 }
-function openPopup(){ marker.bindPopup(popupHtml(),{autoPan:true}).openPopup(); }
-
-const $coords = document.getElementById('coords');
-const $contact = document.getElementById('contact');
-const $out = document.getElementById('out');
-const $bvol = document.getElementById('bvol');
-const $bfire = document.getElementById('bfire');
-
-$contact.value = CONTACT || "";
-if (MODE === "fire") $bfire.classList.add("active"); else $bvol.classList.add("active");
-
-function build(mode){
-  const c = coords().replace(/\s/g,'');
-  const contact = $contact.value.trim();
-  const head = mode === "fire" ? `fire ${c}` : c;
-  const tail = contact ? ` ${contact}` : "";
-  return head + tail + (mode === "fire" ? " smoke" : " note");
-}
-function update(){
-  $coords.textContent = coords();
-  $out.value = build(MODE);
-}
-marker.on('drag', update); marker.on('dragend', ()=>{ update(); openPopup(); });
-map.on('click', e => { marker.setLatLng(e.latlng); update(); openPopup(); });
-
-$bvol.onclick = ()=>{ $bfire.classList.remove("active"); $bvol.classList.add("active"); $out.value = build("vol"); copyToClipboard($out.value); };
-$bfire.onclick = ()=>{ $bvol.classList.remove("active"); $bfire.classList.add("active"); $out.value = build("fire"); copyToClipboard($out.value); };
-
-update(); openPopup();
 </script>
 </body>
 </html>
