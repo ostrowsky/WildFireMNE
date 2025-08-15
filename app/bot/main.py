@@ -18,7 +18,7 @@ from aiogram.types import (
     InlineKeyboardButton, InlineKeyboardMarkup, ContentType
 )
 
-from .storage import init_db, save_event, delete_event_by_owner, get_geojson
+from .storage import init_db, save_event, delete_event_by_owner, fetch_geojson
 
 # --------- конфигурация ----------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -58,7 +58,7 @@ async def index(request: Request):
 
 @app.get("/geojson")
 async def geojson():
-    return JSONResponse(get_geojson())
+    return JSONResponse(fetch_geojson())
 
 
 # отдаём фото по file_id через Telegram
