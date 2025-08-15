@@ -279,11 +279,5 @@ def fetch_geojson(limit_latest_per_type: int = 500) -> Dict[str, Any]:
 
     return {"type": "FeatureCollection", "features": features}
 
-# --- Backward-compat alias -----------------------------------------------
-def add_event(*args, **kwargs):
-    """
-    Backward-compatible alias for older code paths that still import
-    `add_event` from app.bot.storage. Prefer using `save_event`.
-    """
-    return save_event(*args, **kwargs)
+
 
