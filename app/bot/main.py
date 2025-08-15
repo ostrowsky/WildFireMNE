@@ -44,20 +44,17 @@ CENTER_ZOOM = int(os.getenv("CENTER_ZOOM", "12"))
 BASE_URL = os.getenv("BASE_URL", "").strip()
 MAP_URL = os.getenv("MAP_URL", "").strip()
 
-# Map tiles key (перенесено в ENV)
-MAP_TILER_KEY = os.getenv("MAP_TILER_KEY", "").strip()
-
 # Signature for delete links
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me").encode()
 
 # Railway passes PORT (fallback for local)
 PORT = int(os.getenv("PORT", "8080"))
 
-# ---------- FIRMS Area API (CSV) – ключ из окружения ----------
-FIRMS_MAP_KEY = os.getenv("FIRMS_MAP_KEY", "").strip()
-if not FIRMS_MAP_KEY:
-    raise RuntimeError("FIRMS_MAP_KEY is not set in environment!")
+# ---------- Map tiles API KEY (front-end uses it directly) ----------
+# (ключ также зашит в webmap/*.html; здесь не используется)
 
+# ---------- FIRMS Area API (CSV) – ключ ЗАШИТ В КОДЕ ----------
+FIRMS_MAP_KEY = "172f6ffa32d48a50ce4f15f8e3a550d4"  # <- ваш ключ
 # BBOX Черногории: west,south,east,north
 FIRMS_DEFAULT_BBOX = "18.3,41.8,20.4,43.6"
 # Источники по умолчанию
@@ -137,8 +134,7 @@ def index():
     html = (html
             .replace("__LAT__", str(CENTER_LAT))
             .replace("__LON__", str(CENTER_LON))
-            .replace("__ZOOM__", str(CENTER_ZOOM))
-            .replace("__MAP_KEY__", MAP_TILER_KEY))
+            .replace("__ZOOM__", str(CENTER_ZOOM)))
     return HTMLResponse(html)
 
 @app.get("/pick", response_class=HTMLResponse)
@@ -156,8 +152,7 @@ def pick(
             .replace("__LON__", str(lon))
             .replace("__ZOOM__", str(z))
             .replace("__MODE__", "fire" if mode.lower() == "fire" else "vol")
-            .replace("__CONTACT__", contact)
-            .replace("__MAP_KEY__", MAP_TILER_KEY))
+            .replace("__CONTACT__", contact))
     return HTMLResponse(html)
 
 @app.get("/geojson")
@@ -203,6 +198,7 @@ async def photo(file_id: str):
 
 # ===================== SATELLITE HOTSPOTS (FIRMS Area API CSV) =====================
 
+# key -> (ts, data)
 _hotspots_cache: dict[str, tuple[float, dict]] = {}
 
 def _cache_get(key: str) -> dict | None:
@@ -222,6 +218,11 @@ def _in_mne_bbox(lat: float, lon: float) -> bool:
             MNE_BBOX["min_lon"] <= lon <= MNE_BBOX["max_lon"])
 
 def _csv_to_features(csv_text: str, source: str) -> list[dict]:
+    """
+    Parse FIRMS CSV rows -> minimal GeoJSON features.
+    Expected columns include at least: latitude, longitude, acq_date, acq_time,
+    bright_ti4 OR brightness, frp, confidence, satellite (may vary by product).
+    """
     features = []
     reader = csv.DictReader(StringIO(csv_text))
     for row in reader:
@@ -230,6 +231,7 @@ def _csv_to_features(csv_text: str, source: str) -> list[dict]:
             lon = float(row.get("longitude") or row.get("LONGITUDE"))
         except Exception:
             continue
+        # Optional props
         acq_date = (row.get("acq_date") or row.get("ACQ_DATE") or "").strip()
         acq_time = (row.get("acq_time") or row.get("ACQ_TIME") or "").strip()
         bright = (row.get("bright_ti4") or row.get("brightness") or
@@ -254,6 +256,9 @@ def _csv_to_features(csv_text: str, source: str) -> list[dict]:
     return features
 
 async def _fetch_firms_csv(session: aiohttp.ClientSession, source: str, bbox: str, days: int) -> list[dict]:
+    """
+    GET https://firms.modaps.eosdis.nasa.gov/api/area/csv/{MAP_KEY}/{SOURCE}/{west,south,east,north}/{days}
+    """
     url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{FIRMS_MAP_KEY}/{source}/{bbox}/{days}"
     try:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as r:
@@ -280,6 +285,15 @@ async def hotspots_debug():
 
 @app.get("/hotspots")
 async def hotspots(days: int = 1, bbox: str | None = None, sources: str | None = None, diag: int = 0):
+    """
+    Возвращает GeoJSON FeatureCollection активных точек с FIRMS (CSV Area API),
+    объединяя несколько источников (по умолчанию VIIRS_SNPP_NRT, VIIRS_NOAA20_NRT, MODIS_NRT).
+    Параметры:
+      - days: окно в сутках (по умолчанию 1)
+      - bbox: "west,south,east,north" (по умолчанию Черногория 18.3,41.8,20.4,43.6)
+      - sources: через запятую, например "VIIRS_SNPP_NRT,MODIS_NRT"
+      - diag=1: добавить диагностику (список URL и счетчики)
+    """
     bbox = (bbox or FIRMS_DEFAULT_BBOX).strip()
     src_list = [s.strip() for s in (sources.split(",") if sources else FIRMS_SOURCES) if s.strip()]
     cache_key = json.dumps({"d": days, "b": bbox, "s": src_list}, sort_keys=True)
@@ -298,6 +312,7 @@ async def hotspots(days: int = 1, bbox: str | None = None, sources: str | None =
             if diag:
                 diag_list.append({"source": src, "count": len(feats)})
 
+    # Доп. фильтр по Черногории (на случай, если bbox шире)
     kept = []
     for f in feats_all:
         try:
@@ -403,13 +418,14 @@ async def cancel(msg: Message):
     cancel_mode(msg.from_user.id)
     await msg.answer("Mode cancelled.", reply_markup=MAIN_KB)
 
+# ---------- regular & live locations ----------
 @dp.message(F.location)
 async def handle_location(msg: Message):
     loc = msg.location
     _last_loc[msg.from_user.id] = (loc.latitude, loc.longitude, int(time.time()))
     live_period = getattr(loc, "live_period", None)
 
-    if live_period:
+    if live_period:  # start live
         now = int(time.time())
         eid = upsert_live_event(
             ts=now, user_id=msg.from_user.id,
@@ -424,6 +440,7 @@ async def handle_location(msg: Message):
             await msg.answer("Open the live map:", reply_markup=kb)
         return
 
+    # non-live: treat as volunteer unless in fire mode
     mode = _user_mode.get(msg.from_user.id)
     is_fire = bool(mode and mode[0] == "report_fire" and int(time.time()) - mode[1] < 1200)
     typ = "fire" if is_fire else "volunteer"
@@ -456,6 +473,7 @@ async def live_stop_cmd(msg: Message):
     stop_live(msg.chat.id, msg.message_id)
     await msg.answer("Live tracking stopped for the last message.", reply_markup=MAIN_KB)
 
+# ---------- text coordinates ----------
 def parse_coords_with_contact(s: str):
     if not s:
         return None, None, None, None
@@ -505,6 +523,7 @@ async def maybe_coords(msg: Message):
     if kb:
         await msg.answer("Open the live map:", reply_markup=kb)
 
+# ---------- photos as fires ----------
 @dp.message(F.photo)
 async def got_photo(msg: Message):
     now = int(time.time())
@@ -537,6 +556,7 @@ async def got_photo(msg: Message):
     if kb:
         await msg.answer("Open the live map:", reply_markup=kb)
 
+# ---------- start polling ----------
 async def _run_bot():
     if not TELEGRAM_TOKEN:
         return
