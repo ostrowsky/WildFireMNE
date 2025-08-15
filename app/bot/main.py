@@ -68,8 +68,21 @@ async def index(_: Request):
 async def geojson():
     return JSONResponse(get_geojson())
 
+# ---------- aiogram 3.x compatibility for Bot(default parse_mode) ----------
+def make_bot(token: str) -> Bot:
+    """
+    aiogram>=3.7: Bot(..., default=DefaultBotProperties(parse_mode=...))
+    aiogram<3.7 : Bot(..., parse_mode=...)
+    """
+    try:
+        from aiogram.client.default import DefaultBotProperties
+        return Bot(token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    except Exception:
+        # fallback for 3.0..3.6
+        return Bot(token, parse_mode=ParseMode.HTML)
+
 # serve Telegram photo by file_id
-bot_dl = Bot(TOKEN, parse_mode=ParseMode.HTML)
+bot_dl = make_bot(TOKEN)
 
 @app.get("/photo/{file_id}")
 async def photo(file_id: str):
@@ -152,8 +165,8 @@ async def hotspots_debug():
 async def healthz():
     return {"ok": True, "time": int(time.time())}
 
-# --------- Telegram bot (aiogram v3) ----------
-bot = Bot(TOKEN, parse_mode=ParseMode.HTML)
+# --------- Telegram bot (aiogram 3.x) ----------
+bot = make_bot(TOKEN)
 dp = Dispatcher()
 
 def _kb_main() -> ReplyKeyboardMarkup:
@@ -191,7 +204,6 @@ async def on_start(msg: Message):
     await msg.answer("Open map:", reply_markup=_map_button(uid))
 
 # --------- Instant volunteer location (single) ----------
-# Универсальные фильтры для aiogram 3.x (без .as_(bool)):
 @dp.message(F.location & ((F.location.live_period == None) | (F.location.live_period <= 0)))
 async def on_instant_location(msg: Message):
     uid = msg.from_user.id
@@ -223,7 +235,6 @@ async def on_live_update(msg: Message):
     lat = msg.location.latitude
     lon = msg.location.longitude
     update_live_position(uid, lat, lon)
-    # silent ack
 
 # --------- Fire report flow ----------
 @dp.message(F.text == "🔥 Report Fire")
