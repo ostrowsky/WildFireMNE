@@ -18,7 +18,7 @@ from aiogram.types import (
     InlineKeyboardButton, InlineKeyboardMarkup, ContentType
 )
 
-from .storage import init_db, save_event, delete_event, get_geojson
+from .storage import init_db, save_event, delete_event_by_owner, get_geojson
 
 # --------- конфигурация ----------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -210,7 +210,7 @@ async def delete_event_api(event_id: int, uid: Optional[int] = None, sig: Option
     good = (sign_user(int(uid)) == sig)
     if not good:
         raise HTTPException(status_code=403, detail="bad signature")
-    ok = delete_event(event_id, int(uid))
+    ok = delete_event_by_owner(event_id, int(uid))
     return {"ok": ok}
 
 
