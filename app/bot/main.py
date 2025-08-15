@@ -1,226 +1,339 @@
 import os
 import re
+import io
+import csv
+import hmac
 import time
-from typing import Optional, Tuple
+import asyncio
+import logging
+from typing import Optional, Tuple, List, Dict
 
-from aiogram import Bot, Dispatcher, F, Router
+import requests
+from fastapi import FastAPI, HTTPException, Response
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode, ContentType, ChatType
 from aiogram.filters import CommandStart
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     Message, ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton
 )
 
-from app.bot.storage import (
-    init_db,
-    save_event,           # (type, user_id, username, lat, lon, ts, text, photo_file_id)
-    delete_event,
-    save_live_start,      # (user_id, username, lat, lon, ts, live_until)
-    save_live_update,     # (user_id, lat, lon, ts)
-    stop_live             # (user_id)
+from .storage import (
+    init_db, connect,
+    save_event, delete_event,
+    save_live_start, save_live_update, stop_live
 )
 
-BASE_URL = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
+# ---------------------- config ----------------------
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+log = logging.getLogger("wildfire")
+
 TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+if not TOKEN:
+    raise RuntimeError("TELEGRAM_TOKEN is not set")
 
-# aiogram 3.7+: parse_mode через DefaultBotProperties
-bot = Bot(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+SECRET_KEY = os.getenv("SECRET_KEY", "dev")
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
+
+CENTER_LAT = float(os.getenv("CENTER_LAT", "42.179"))
+CENTER_LON = float(os.getenv("CENTER_LON", "18.942"))
+CENTER_ZOOM = int(os.getenv("CENTER_ZOOM", "12"))
+
+MAP_TILER_KEY = os.getenv("MAP_TILER_KEY", "").strip()
+
+NASA_API_KEY = os.getenv("NASA_API_KEY", "").strip()
+FIRMS_BBOX = os.getenv("FIRMS_BBOX", "18.3,41.8,20.4,43.6")
+FIRMS_DAYS = int(os.getenv("FIRMS_DAYS", "1"))
+
+# ---------------------- ASGI app ----------------------
+app = FastAPI()
+ASSETS_DIR = os.path.join(os.path.dirname(__file__), "..", "webmap")
+app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
+
+def _render_index() -> str:
+    path = os.path.join(ASSETS_DIR, "index.html")
+    with open(path, "r", encoding="utf-8") as f:
+        html = f.read()
+    return (html
+            .replace("const DEFAULT_CENTER = [42.179, 18.942];", f"const DEFAULT_CENTER = [{CENTER_LAT}, {CENTER_LON}];")
+            .replace("const DEFAULT_ZOOM   = 12;", f"const DEFAULT_ZOOM   = {CENTER_ZOOM};")
+            .replace('const MAP_TILER_KEY  = "SC5bBhZz9sPQyDQTyEez";', f'const MAP_TILER_KEY  = "{MAP_TILER_KEY or "disable"}";')
+            )
+
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    return HTMLResponse(_render_index())
+
+@app.get("/healthz")
+async def healthz():
+    return {"ok": True, "time": int(time.time())}
+
+# ---------------------- GeoJSON API ----------------------
+def _feat_event(row) -> Dict:
+    return {
+        "type": "Feature",
+        "geometry": {"type": "Point", "coordinates": [float(row["lon"]), float(row["lat"])]},
+        "properties": {
+            "id": int(row["id"]),
+            "type": str(row["type"]),
+            "user_id": int(row["user_id"]),
+            "contact": row["username"],
+            "text": row["text"],
+            "photo_file_id": row["photo_file_id"],
+            "ts": int(row["ts"]),
+        },
+    }
+
+def _feat_live(row) -> Dict:
+    fid = -int(row["user_id"])  # стабильный отрицательный id
+    return {
+        "type": "Feature",
+        "geometry": {"type": "Point", "coordinates": [float(row["lon"]), float(row["lat"])]},
+        "properties": {
+            "id": fid,
+            "type": "volunteer_live",
+            "user_id": int(row["user_id"]),
+            "contact": row["username"],
+            "text": None,
+            "photo_file_id": None,
+            "ts": int(row["ts"]),
+            "live_until": int(row["live_until"]),
+        },
+    }
+
+@app.get("/geojson")
+async def geojson():
+    feats: List[Dict] = []
+    with connect() as con:
+        cur = con.cursor()
+        cur.execute("SELECT id,type,user_id,username,lat,lon,ts,text,photo_file_id FROM events ORDER BY ts DESC;")
+        feats.extend(_feat_event(r) for r in cur.fetchall())
+        cur.execute("SELECT user_id,username,lat,lon,ts,live_until FROM live WHERE live_until >= ?", (int(time.time()),))
+        feats.extend(_feat_live(r) for r in cur.fetchall())
+    return {"type": "FeatureCollection", "features": feats}
+
+# ---------------------- deletion APIs ----------------------
+def _sign(uid: int) -> str:
+    return hmac.new(SECRET_KEY.encode(), f"{uid}:{SECRET_KEY}".encode(), "sha256").hexdigest()
+
+def _check(uid: int, sig: str) -> bool:
+    try:
+        return hmac.compare_digest(sig, _sign(uid))
+    except Exception:
+        return False
+
+@app.delete("/event/{event_id}")
+async def api_delete_event(event_id: int, uid: Optional[int] = None, sig: Optional[str] = None):
+    if uid is None or sig is None or not _check(int(uid), sig):
+        raise HTTPException(status_code=403, detail="bad signature")
+    ok = delete_event(event_id, int(uid))
+    return {"ok": ok}
+
+@app.delete("/live/{user_id}")
+async def api_delete_live(user_id: int, uid: Optional[int] = None, sig: Optional[str] = None):
+    if uid is None or sig is None or int(uid) != int(user_id) or not _check(int(uid), sig):
+        raise HTTPException(status_code=403, detail="bad signature")
+    stop_live(int(user_id))
+    return {"ok": True}
+
+# ---------------------- photos (Telegram proxy) ----------------------
+# отдельный бот для скачивания файлов
+def make_bot(token: str) -> Bot:
+    try:
+        return Bot(token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    except Exception:  # на всякий случай для старых 3.x
+        return Bot(token, parse_mode=ParseMode.HTML)
+
+bot_files = make_bot(TOKEN)
+
+@app.get("/photo/{file_id}")
+async def photo(file_id: str):
+    try:
+        file = await bot_files.get_file(file_id)
+        buf = await bot_files.download_file(file.file_path)
+        return Response(content=buf.read(), media_type="image/jpeg")
+    except Exception:
+        raise HTTPException(status_code=404, detail="photo not found")
+
+# ---------------------- NASA FIRMS ----------------------
+def _firms_urls() -> List[str]:
+    if not NASA_API_KEY:
+        return []
+    bbox = FIRMS_BBOX
+    days = str(max(1, min(FIRMS_DAYS, 7)))
+    return [
+        f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{NASA_API_KEY}/VIIRS_SNPP_NRT/{bbox}/{days}",
+        f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{NASA_API_KEY}/VIIRS_NOAA20_NRT/{bbox}/{days}",
+        f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{NASA_API_KEY}/MODIS_NRT/{bbox}/{days}",
+    ]
+
+def _csv_to_features(text: str) -> List[Dict]:
+    feats: List[Dict] = []
+    reader = csv.DictReader(io.StringIO(text))
+    for row in reader:
+        try:
+            lat = float(row.get("latitude") or row.get("LATITUDE") or row.get("lat") or "")
+            lon = float(row.get("longitude") or row.get("LONGITUDE") or row.get("lon") or "")
+        except Exception:
+            continue
+        props = {
+            "acq_date": row.get("acq_date") or row.get("ACQ_DATE"),
+            "acq_time": row.get("acq_time") or row.get("ACQ_TIME"),
+            "confidence": row.get("confidence") or row.get("CONFIDENCE"),
+            "src": row.get("instrument") or row.get("satellite") or "",
+        }
+        feats.append({"type": "Feature", "geometry": {"type": "Point", "coordinates": [lon, lat]}, "properties": props})
+    return feats
+
+@app.get("/hotspots")
+async def hotspots():
+    urls = _firms_urls()
+    if not urls:
+        return {"type": "FeatureCollection", "features": []}
+    features: List[Dict] = []
+    for u in urls:
+        try:
+            r = requests.get(u, timeout=15)
+            if r.status_code == 200 and r.text.strip():
+                features.extend(_csv_to_features(r.text))
+        except Exception as e:
+            log.warning("FIRMS fetch failed %s: %s", u, e)
+    return {"type": "FeatureCollection", "features": features}
+
+@app.get("/hotspots/debug")
+async def hotspots_debug():
+    return {"urls": _firms_urls(), "has_key": bool(NASA_API_KEY), "bbox": FIRMS_BBOX, "days": FIRMS_DAYS}
+
+# ---------------------- bot (aiogram) ----------------------
+bot = make_bot(TOKEN)
 dp = Dispatcher()
-router = Router()
-dp.include_router(router)
 
-# ---------------- UI ----------------
-
-def main_menu_kbd() -> ReplyKeyboardMarkup:
-    # 4 кнопки как вы требовали
+def _kb_main() -> ReplyKeyboardMarkup:
     kb = [
         [KeyboardButton(text="📍 Send my location", request_location=True)],
         [KeyboardButton(text="🟢 Share live location")],
         [KeyboardButton(text="🔥 Report fire")],
         [KeyboardButton(text="🌍 Open live map")],
     ]
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True, one_time_keyboard=False)
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
-def map_button(uid: int, sig: str) -> InlineKeyboardMarkup:
+def _map_btn(uid: int) -> InlineKeyboardMarkup:
+    sig = _sign(uid)
     url = f"{BASE_URL}/?uid={uid}&sig={sig}"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🌍 Open live map", url=url)]
     ])
 
-def pick_button(uid: int, sig: str) -> InlineKeyboardMarkup:
+def _pick_btn(uid: int) -> InlineKeyboardMarkup:
+    sig = _sign(uid)
     url = f"{BASE_URL}/pick?uid={uid}&sig={sig}"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📌 Open picker", url=url)]
     ])
 
-# ---------------- FSM ----------------
+def _user_contact(m: Message) -> str:
+    if m.from_user.username:
+        return f"@{m.from_user.username}"
+    return m.from_user.full_name or str(m.from_user.id)
+
+@dp.message(CommandStart(), F.chat.type.in_({ChatType.PRIVATE}))
+async def on_start_cmd(msg: Message):
+    await msg.answer("Hi! Choose an action:", reply_markup=_kb_main())
+    await msg.answer("Open the live map:", reply_markup=_map_btn(msg.from_user.id))
+
+# 1) instant location
+@dp.message(F.content_type == ContentType.LOCATION, (F.location.live_period == None) | (F.location.live_period <= 0))
+async def instant_location(msg: Message):
+    lat, lon = msg.location.latitude, msg.location.longitude
+    save_event(
+        type="volunteer",
+        user_id=msg.from_user.id,
+        username=_user_contact(msg),
+        lat=lat, lon=lon,
+        ts=int(time.time()),
+        text=None, photo_file_id=None
+    )
+    await msg.answer("Location saved ✅", reply_markup=_kb_main())
+    await msg.answer("Open the live map:", reply_markup=_map_btn(msg.from_user.id))
+
+# 2) live start
+@dp.message(F.content_type == ContentType.LOCATION, F.location.live_period > 0)
+async def live_start(msg: Message):
+    lp = int(msg.location.live_period or 0)
+    save_live_start(
+        uid=msg.from_user.id,
+        username=_user_contact(msg),
+        lat=msg.location.latitude,
+        lon=msg.location.longitude,
+        ts=int(time.time()),
+        live_until=int(time.time()) + lp
+    )
+    await msg.answer("Live location started 🟢", reply_markup=_kb_main())
+    await msg.answer("Open the live map:", reply_markup=_map_btn(msg.from_user.id))
+
+# 2b) live updates (edited_message)
+@dp.edited_message(F.content_type == ContentType.LOCATION)
+async def live_update(msg: Message):
+    save_live_update(
+        uid=msg.from_user.id,
+        lat=msg.location.latitude,
+        lon=msg.location.longitude,
+        ts=int(time.time())
+    )
+
+# 3) report fire -> picker link + collect coords/photo/text
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 
 class AddFire(StatesGroup):
     awaiting_coords = State()
-    awaiting_optional_media = State()
+    awaiting_optional = State()
 
-# ---------------- HELPERS ----------------
+@dp.message(F.text == "🔥 Report fire")
+async def fire_begin(msg: Message, state: FSMContext):
+    await state.set_state(AddFire.awaiting_coords)
+    await msg.answer("Open picker and paste coordinates here, or send a location.", reply_markup=_pick_btn(msg.from_user.id))
 
-def sign(uid: int) -> str:
-    # простая подпись — достаточно для read-only операций удаления собственных точек
-    # (совпадает с вашим серверным проверяющим кодом)
-    import hashlib
-    secret = os.getenv("SECRET_KEY", "dev")
-    return hashlib.sha256(f"{uid}:{secret}".encode()).hexdigest()
-
-def parse_coords(text: str) -> Optional[Tuple[float, float]]:
-    m = re.search(r"(-?\d+(?:\.\d+)?)[,;\s]+(-?\d+(?:\.\d+)?)", text)
-    if not m:
-        return None
-    lat = float(m.group(1)); lon = float(m.group(2))
+def _parse_coords(text: str) -> Optional[Tuple[float, float]]:
+    m = re.search(r"(-?\d+(?:\.\d+)?)[,;\s]+(-?\d+(?:\.\d+)?)", text or "")
+    if not m: return None
+    lat, lon = float(m.group(1)), float(m.group(2))
     if not (-90 <= lat <= 90 and -180 <= lon <= 180):
         return None
     return lat, lon
 
-def username_link(m: Message) -> str:
-    if m.from_user is None:
-        return ""
-    if m.from_user.username:
-        return f"@{m.from_user.username}"
-    return m.from_user.full_name or ""
+@dp.message(AddFire.awaiting_coords, F.content_type == ContentType.LOCATION)
+async def fire_coords_from_loc(msg: Message, state: FSMContext):
+    await state.update_data(coords=(msg.location.latitude, msg.location.longitude))
+    await state.set_state(AddFire.awaiting_optional)
+    await msg.answer("Got coordinates. Send photo and/or text (optional) or 'OK' to finish.", reply_markup=_kb_main())
 
-# ---------------- HANDLERS ----------------
-
-@router.message(CommandStart(), F.chat.type.in_({ChatType.PRIVATE}))
-async def on_start(msg: Message, state: FSMContext):
-    await state.clear()
-    await msg.answer(
-        "Hi! Choose an action:",
-        reply_markup=main_menu_kbd()
-    )
-    # даём кнопку «Открыть карту» отдельным сообщением (со ссылкой с uid/sig)
-    uid = msg.from_user.id
-    await msg.answer(
-        "Open the live map:",
-        reply_markup=map_button(uid, sign(uid))
-    )
-
-# 1) одноразовая текущая геолокация — создаём «volunteer»
-@router.message(F.content_type == ContentType.LOCATION, F.location.live_period == None)
-async def on_location(msg: Message):
-    if not msg.location:
-        return
-    uid = msg.from_user.id
-    username = username_link(msg)
-    lat = msg.location.latitude
-    lon = msg.location.longitude
-    ts = int(time.time())
-
-    save_event(
-        type="volunteer",
-        user_id=uid,
-        username=username,
-        lat=lat, lon=lon,
-        ts=ts,
-        text=None,
-        photo_file_id=None
-    )
-
-    await msg.answer(
-        "Location received and added to the map ✅",
-        reply_markup=main_menu_kbd()
-    )
-    # дублируем ссылку на карту
-    await msg.answer("Open the live map:", reply_markup=map_button(uid, sign(uid)))
-
-# 2) лайв‑локация — старт
-@router.message(F.content_type == ContentType.LOCATION, F.location.live_period.as_('lp'))
-async def on_live_start(msg: Message, lp: int):
-    # Telegram присылает обычное сообщение с location и live_period > 0 — это старт лайва
-    uid = msg.from_user.id
-    username = username_link(msg)
-    lat = msg.location.latitude
-    lon = msg.location.longitude
-    ts = int(time.time())
-    live_until = ts + int(lp or 0)
-
-    save_live_start(uid=uid, username=username, lat=lat, lon=lon, ts=ts, live_until=live_until)
-
-    await msg.answer(
-        "Live location started 🟢 — tracking on the map.",
-        reply_markup=main_menu_kbd()
-    )
-    await msg.answer("Open the live map:", reply_markup=map_button(uid, sign(uid)))
-
-# 2b) лайв‑локация — обновления приходят как edited_message с новым location
-@router.edited_message(F.content_type == ContentType.LOCATION)
-async def on_live_update(msg: Message):
-    if not msg.location:
-        return
-    uid = msg.from_user.id
-    lat = msg.location.latitude
-    lon = msg.location.longitude
-    ts = int(time.time())
-    save_live_update(uid=uid, lat=lat, lon=lon, ts=ts)
-
-# 2c) пользователь остановил live — Telegram пришлёт финальное сообщение без live_period,
-#     но точки больше не обновляются. Добавим команду‑кнопку для явной остановки (по желанию).
-@router.message(F.text == "🟢 Share live location")
-async def explain_live(msg: Message):
-    await msg.answer(
-        "To share <b>Live Location</b>:\n"
-        "• Tap the 📎 (attach) → Location → <b>Share live location</b>\n"
-        "I will keep tracking updates automatically.",
-        reply_markup=main_menu_kbd()
-    )
-
-# 3) Report fire — ведём в пикер с булавкой; после — принимаем координаты/медиа
-@router.message(F.text == "🔥 Report fire")
-async def report_fire(msg: Message, state: FSMContext):
-    await state.set_state(AddFire.awaiting_coords)
-    uid = msg.from_user.id
-    await msg.answer(
-        "Choose the location on the picker and paste coordinates here, "
-        "or just send your current location.",
-        reply_markup=pick_button(uid, sign(uid))
-    )
-
-@router.message(AddFire.awaiting_coords, F.content_type == ContentType.LOCATION)
-async def fire_coords_from_location(msg: Message, state: FSMContext):
-    lat = msg.location.latitude
-    lon = msg.location.longitude
-    await state.update_data(coords=(lat, lon))
-    await state.set_state(AddFire.awaiting_optional_media)
-    await msg.answer("Got coordinates. Now send a photo and/or text (optional), or send “OK” to finish.")
-
-@router.message(AddFire.awaiting_coords, F.text)
+@dp.message(AddFire.awaiting_coords, F.text)
 async def fire_coords_from_text(msg: Message, state: FSMContext):
-    pts = parse_coords(msg.text or "")
+    pts = _parse_coords(msg.text)
     if not pts:
-        await msg.answer("Send coordinates like: <code>42.179000, 18.942000</code> "
-                         "or share location.")
-        return
+        return await msg.answer("Send coordinates like <code>42.179, 18.942</code> or share a location.")
     await state.update_data(coords=pts)
-    await state.set_state(AddFire.awaiting_optional_media)
-    await msg.answer("Got coordinates. Now send a photo and/or text (optional), or send “OK” to finish.")
+    await state.set_state(AddFire.awaiting_optional)
+    await msg.answer("Got coordinates. Send photo and/or text (optional) or 'OK' to finish.", reply_markup=_kb_main())
 
-@router.message(AddFire.awaiting_optional_media, F.photo | F.text)
+@dp.message(AddFire.awaiting_optional, F.photo | F.text)
 async def fire_finish(msg: Message, state: FSMContext):
     data = await state.get_data()
     coords = data.get("coords")
     if not coords:
         await state.clear()
-        await msg.answer("Cancelled.", reply_markup=main_menu_kbd())
-        return
+        return await msg.answer("Cancelled.", reply_markup=_kb_main())
 
     lat, lon = coords
-    uid = msg.from_user.id
-    username = username_link(msg)
-    ts = int(time.time())
     text = None
-    file_id = None
-
+    photo_id = None
     if msg.photo:
-        # берём самую крупную
-        file_id = msg.photo[-1].file_id
+        photo_id = msg.photo[-1].file_id
         if msg.caption:
             text = msg.caption
     elif msg.text and msg.text.lower() != "ok":
@@ -228,39 +341,23 @@ async def fire_finish(msg: Message, state: FSMContext):
 
     save_event(
         type="fire",
-        user_id=uid,
-        username=username,
-        lat=lat, lon=lon,
-        ts=ts,
-        text=text,
-        photo_file_id=file_id
+        user_id=msg.from_user.id,
+        username=_user_contact(msg),
+        lat=lat, lon=lon, ts=int(time.time()),
+        text=text, photo_file_id=photo_id
     )
     await state.clear()
-    await msg.answer("Fire point added 🔥✅", reply_markup=main_menu_kbd())
-    await msg.answer("Open the live map:", reply_markup=map_button(uid, sign(uid)))
+    await msg.answer("Fire point added 🔥✅", reply_markup=_kb_main())
+    await msg.answer("Open the live map:", reply_markup=_map_btn(msg.from_user.id))
 
-# 4) открыть карту (обычная, с тайлами)
-@router.message(F.text == "🌍 Open live map")
+@dp.message(F.text == "🌍 Open live map")
 async def open_map(msg: Message):
-    uid = msg.from_user.id
-    await msg.answer("Open the live map:", reply_markup=map_button(uid, sign(uid)))
+    await msg.answer("Open the live map:", reply_markup=_map_btn(msg.from_user.id))
 
-# опционально: удаление своей точки по id (адресное удаление идёт со стороны карты по /event/:id)
-@router.message(F.text.regexp(r"^/delete\s+\d+$"))
-async def cmd_delete(msg: Message):
-    m = re.search(r"^/delete\s+(\d+)$", msg.text.strip())
-    if not m:
-        return
-    point_id = int(m.group(1))
-    deleted = delete_event(point_id, msg.from_user.id)
-    await msg.answer("Deleted ✅" if deleted else "Not found / not yours")
-
-# ---------------- BOOT ----------------
-
-def app_factory():
-    # вызывается из asgi/uvicorn
+# ---------------------- background: start polling ----------------------
+@app.on_event("startup")
+async def _startup():
     init_db()
-    return dp
-
-# совместимость с Procfile: uvicorn app.bot.main:app
-app = app_factory()
+    log.info("DB ready")
+    loop = asyncio.get_event_loop()
+    loop.create_task(dp.start_polling(bot))
