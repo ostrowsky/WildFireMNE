@@ -64,9 +64,41 @@ def _render_index() -> str:
             .replace('const MAP_TILER_KEY  = "SC5bBhZz9sPQyDQTyEez";', f'const MAP_TILER_KEY  = "{MAP_TILER_KEY or "disable"}";')
             )
 
+def _render_pick(uid: Optional[int], sig: Optional[str], init_lat: Optional[float], init_lon: Optional[float]) -> str:
+    """
+    Вставляем центр/зум/ключ и ссылку "Open live map" с uid/sig.
+    Начальная позиция булавки — либо lat/lon из query, либо дефолтный центр.
+    """
+    path = os.path.join(ASSETS_DIR, "pick.html")
+    with open(path, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    openmap_url = BASE_URL
+    if uid and sig:
+        openmap_url = f"{BASE_URL}/?uid={uid}&sig={sig}"
+
+    lat = init_lat if init_lat is not None else CENTER_LAT
+    lon = init_lon if init_lon is not None else CENTER_LON
+
+    return (html
+            .replace("__INIT_LAT__", str(lat))
+            .replace("__INIT_LON__", str(lon))
+            .replace("__CENTER_LAT__", str(CENTER_LAT))
+            .replace("__CENTER_LON__", str(CENTER_LON))
+            .replace("__CENTER_ZOOM__", str(CENTER_ZOOM))
+            .replace("__MAP_TILER_KEY__", MAP_TILER_KEY or "disable")
+            .replace("__OPENMAP_URL__", openmap_url)
+            )
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return HTMLResponse(_render_index())
+
+@app.get("/pick", response_class=HTMLResponse)
+async def pick(uid: Optional[int] = None, sig: Optional[str] = None,
+               lat: Optional[float] = None, lon: Optional[float] = None):
+    # /pick доступен всем; uid/sig нужны только для удобной ссылки "Open live map"
+    return HTMLResponse(_render_pick(uid, sig, lat, lon))
 
 @app.get("/healthz")
 async def healthz():
@@ -141,11 +173,10 @@ async def api_delete_live(user_id: int, uid: Optional[int] = None, sig: Optional
     return {"ok": True}
 
 # ---------------------- photos (Telegram proxy) ----------------------
-# отдельный бот для скачивания файлов
 def make_bot(token: str) -> Bot:
     try:
         return Bot(token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    except Exception:  # на всякий случай для старых 3.x
+    except Exception:
         return Bot(token, parse_mode=ParseMode.HTML)
 
 bot_files = make_bot(TOKEN)
@@ -245,39 +276,41 @@ async def on_start_cmd(msg: Message):
     await msg.answer("Hi! Choose an action:", reply_markup=_kb_main())
     await msg.answer("Open the live map:", reply_markup=_map_btn(msg.from_user.id))
 
-# 1) instant location
-@dp.message(F.content_type == ContentType.LOCATION, (F.location.live_period == None) | (F.location.live_period <= 0))
-async def instant_location(msg: Message):
+# ---- единый обработчик любой локации ----
+@dp.message(F.content_type == ContentType.LOCATION)
+async def on_any_location(msg: Message):
+    if not msg.location:
+        return
+    lp = msg.location.live_period
     lat, lon = msg.location.latitude, msg.location.longitude
-    save_event(
-        type="volunteer",
-        user_id=msg.from_user.id,
-        username=_user_contact(msg),
-        lat=lat, lon=lon,
-        ts=int(time.time()),
-        text=None, photo_file_id=None
-    )
-    await msg.answer("Location saved ✅", reply_markup=_kb_main())
-    await msg.answer("Open the live map:", reply_markup=_map_btn(msg.from_user.id))
+    uid = msg.from_user.id
+    now = int(time.time())
 
-# 2) live start
-@dp.message(F.content_type == ContentType.LOCATION, F.location.live_period > 0)
-async def live_start(msg: Message):
-    lp = int(msg.location.live_period or 0)
-    save_live_start(
-        uid=msg.from_user.id,
-        username=_user_contact(msg),
-        lat=msg.location.latitude,
-        lon=msg.location.longitude,
-        ts=int(time.time()),
-        live_until=int(time.time()) + lp
-    )
-    await msg.answer("Live location started 🟢", reply_markup=_kb_main())
-    await msg.answer("Open the live map:", reply_markup=_map_btn(msg.from_user.id))
+    if isinstance(lp, int) and lp > 0:
+        save_live_start(
+            uid=uid,
+            username=_user_contact(msg),
+            lat=lat, lon=lon,
+            ts=now,
+            live_until=now + lp
+        )
+        await msg.answer("Live location started 🟢", reply_markup=_kb_main())
+    else:
+        save_event(
+            type="volunteer",
+            user_id=uid,
+            username=_user_contact(msg),
+            lat=lat, lon=lon,
+            ts=now, text=None, photo_file_id=None
+        )
+        await msg.answer("Location saved ✅", reply_markup=_kb_main())
 
-# 2b) live updates (edited_message)
+    await msg.answer("Open the live map:", reply_markup=_map_btn(uid))
+
 @dp.edited_message(F.content_type == ContentType.LOCATION)
 async def live_update(msg: Message):
+    if not msg.location:
+        return
     save_live_update(
         uid=msg.from_user.id,
         lat=msg.location.latitude,
@@ -285,7 +318,7 @@ async def live_update(msg: Message):
         ts=int(time.time())
     )
 
-# 3) report fire -> picker link + collect coords/photo/text
+# 3) report fire -> picker + coords/photo/text
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
@@ -360,4 +393,5 @@ async def _startup():
     init_db()
     log.info("DB ready")
     loop = asyncio.get_event_loop()
+    log.info("Start polling")
     loop.create_task(dp.start_polling(bot))
