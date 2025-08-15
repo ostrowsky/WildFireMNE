@@ -1,51 +1,65 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>Live Wildfire Map</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <meta charset="utf-8">
+  <title>Live Map</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css">
   <style>
-    html, body { height: 100%; margin: 0; }
-    #map { height: 100%; margin: 0; }
-    .legend, .sidebar {
-      position: absolute; right: 10px; background: #fff; padding: 10px 12px;
-      border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.1); font: 14px/1.2 system-ui, Arial;
+    html, body { height:100%; margin:0; }
+    #map { position:absolute; inset:0; }
+
+    /* Legend */
+    .legend{
+      position:absolute; right:14px; top:14px; z-index:700;
+      background:#fff; border-radius:12px; padding:12px 14px;
+      box-shadow:0 6px 20px rgba(0,0,0,.12); font:14px/1.2 system-ui, Arial;
     }
-    .legend { top: 10px; }
-    .sidebar { top: 92px; bottom: 10px; width: 300px; display: flex; flex-direction: column; }
-    .legend b{ display:block; margin-bottom:6px;}
-    .pill { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
+    .legend b{ display:block; margin-bottom:8px; }
+    .dot{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:8px; vertical-align:middle; }
     .red{ background:#e53935; } .blue{ background:#1e88e5; }
-    .btn { display:inline-block; padding:6px 10px; border:1px solid #ddd; border-radius:6px; cursor:pointer; text-decoration:none; background:#fff; }
-    .btn:disabled{ opacity:.5; cursor:not-allowed; }
-    .btn:active{ background:#eee; }
-    .photo { max-width: 260px; display:block; margin-top:6px; border-radius:6px }
 
-    .tabs { display:flex; gap:6px; margin-bottom:8px; }
-    .tab { flex:1; text-align:center; border:1px solid #ddd; border-radius:8px; padding:6px; cursor:pointer; user-select:none; }
-    .tab.active { background:#f5f5f5; font-weight:600; }
+    /* Sidebar */
+    .sidebar{
+      position:absolute; right:14px; top:102px; bottom:14px; width:320px; z-index:700;
+      background:#fff; border-radius:14px; box-shadow:0 10px 30px rgba(0,0,0,.12);
+      display:flex; flex-direction:column; overflow:hidden;
+      transition:transform .2s ease, opacity .2s ease;
+    }
+    .sidebar.collapsed{ transform:translateX(calc(100% + 14px)); opacity:.0; pointer-events:none; }
+    .tabs{ display:flex; gap:8px; padding:12px; }
+    .tab{ flex:1; text-align:center; padding:10px 12px; border-radius:10px; background:#f2f3f5; cursor:pointer; user-select:none; }
+    .tab.active{ background:#e7efff; color:#0b57d0; font-weight:600; }
+    .toolbar{ display:flex; align-items:center; gap:10px; padding:0 12px 10px 12px; }
+    .search{ flex:1; height:36px; border:1px solid #e2e2e2; border-radius:10px; padding:0 10px; outline:none; }
+    .list{ flex:1; overflow:auto; padding:0 12px 12px 12px; }
+    .item{
+      border:1px solid #ececec; border-radius:10px; padding:10px 10px;
+      margin:8px 0; display:flex; justify-content:space-between; align-items:center; gap:10px; cursor:pointer;
+    }
+    .item .meta{ font-size:12px; opacity:.75; }
+    .pill{ font-size:12px; padding:2px 6px; border-radius:999px; background:#f3f5f7; }
+    .btn{ border:1px solid #ddd; border-radius:8px; padding:6px 10px; background:#fff; cursor:pointer; text-decoration:none; }
+    .btn:active{ background:#f1f1f1; }
+    .pager{ display:flex; justify-content:space-between; align-items:center; gap:10px; padding:10px 12px 12px; }
+    .pager .info{ opacity:.7; }
 
-    .controls { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
-    .controls input[type="text"] { flex:1; padding:6px 8px; border:1px solid #ddd; border-radius:8px; }
-    .controls label { display:flex; align-items:center; gap:6px; font-size:13px; white-space:nowrap; }
+    /* Toggle button (floating) */
+    .toggle{
+      position:absolute; right:14px; top:102px;
+      z-index:705; width:40px; height:40px; border-radius:10px;
+      border:1px solid #e3e3e3; background:#fff; display:flex; align-items:center; justify-content:center;
+      box-shadow:0 6px 20px rgba(0,0,0,.12); cursor:pointer; user-select:none;
+      transition:transform .2s ease;
+    }
+    .toggle:hover{ transform:scale(1.03); }
+    .toggle .bar{ width:18px; height:2px; background:#333; margin:2px 0; display:block; }
+    .toggle.hidden{ display:none; }
 
-    .list { overflow:auto; border:1px solid #eee; border-radius:8px; flex:1; }
-    .item { padding:8px 10px; border-bottom:1px solid #f1f1f1; display:flex; gap:8px; align-items:center; }
-    .item:hover { background:#fafafa; }
-    .item .body { flex:1; cursor:pointer; }
-    .item .actions { display:flex; gap:6px; }
-    .item .copy { padding:4px 8px; border:1px solid #ddd; border-radius:6px; background:#fff; cursor:pointer; }
-    .item .copy:active { background:#eee; }
-
-    .meta { opacity:.75; font-size:12px; }
-    .pager { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:8px; }
-    .pageinfo { font-variant-numeric: tabular-nums; opacity:.8; }
-
-    @media (max-width: 980px) {
-      .sidebar { width: 240px; }
-      .photo { max-width: 200px; }
-      .controls label { font-size:12px; }
+    /* Mobile: sidebar collapsed by default; toggle visible */
+    @media (max-width: 940px) {
+      .sidebar { width: 88vw; }
+      .toggle { display:flex; }
     }
   </style>
 </head>
@@ -54,398 +68,291 @@
 
 <div class="legend">
   <b>Legend</b>
-  <div><span class="pill red"></span>Fire (red)</div>
-  <div><span class="pill blue"></span>Volunteer (blue)</div>
+  <div><span class="dot red"></span>Fire (red)</div>
+  <div><span class="dot blue"></span>Volunteer (blue)</div>
 </div>
 
-<div class="sidebar">
+<div id="toggle" class="toggle" title="Show/Hide panel">
+  <span class="bar"></span><span class="bar"></span><span class="bar"></span>
+</div>
+
+<div id="sidebar" class="sidebar">
   <div class="tabs">
-    <div id="tabVol" class="tab active">Volunteers</div>
-    <div id="tabFire" class="tab">Fires</div>
+    <div class="tab active" data-tab="vols">Volunteers</div>
+    <div class="tab" data-tab="fires">Fires</div>
   </div>
-
-  <div class="controls">
-    <input id="q" type="text" placeholder="Search…" />
-    <label><input id="onlyMine" type="checkbox" /> Only my points</label>
+  <div class="toolbar">
+    <input id="search" class="search" placeholder="Search…">
+    <label style="display:flex; align-items:center; gap:6px; white-space:nowrap; font:13px system-ui,Arial;">
+      <input type="checkbox" id="mine"> Only my points
+    </label>
   </div>
-
-  <div id="listVol" class="list"></div>
-  <div id="listFire" class="list" style="display:none"></div>
-
+  <div id="list" class="list"></div>
   <div class="pager">
-    <button id="prevBtn" class="btn">Prev</button>
-    <span id="pageInfo" class="pageinfo">1 / 1</span>
-    <button id="nextBtn" class="btn">Next</button>
+    <button id="prev" class="btn">Prev</button>
+    <div class="info" id="pageinfo">1 / 1</div>
+    <button id="next" class="btn">Next</button>
   </div>
 </div>
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
-const MAP_KEY = "__MAP_KEY__"; // подставляет бэкенд из env MAP_TILER_KEY
+/* ===== Map constants (подменяются бекендом) ===== */
 const DEFAULT_CENTER = [__LAT__, __LON__];
 const DEFAULT_ZOOM   = __ZOOM__;
+const MAP_TILER_KEY  = "__MAP_KEY__";
+
+/* ===== State ===== */
 const AUTO_REFRESH_MS = 30000;
-const PAGE_SIZE = 15; // элементов на страницу
-
+const PAGE_SIZE = 15;
 const urlParams = new URLSearchParams(location.search);
-const focusId = urlParams.get("focus");
-const uid = urlParams.get("uid"); // строка или null
-const uidNum = uid ? Number(uid) : NaN; // для фильтра «Only my points»
+const uid = urlParams.get("uid");
 const sig = urlParams.get("sig");
+const focusId = urlParams.get("focus");
+const forceTiles = urlParams.get("tiles"); // 'osm' | 'maptiler'
 
-const map = L.map('map', { zoomControl: true });
+let map, geoLayer = null;
+let movedByUser = false;
+let allFeatures = []; // last /geojson
+let layerById = new Map();
 
-// Выбор тайлов: MapTiler при наличии ключа, иначе OSM
-if (MAP_KEY && MAP_KEY !== "__MAP_KEY__") {
-  L.tileLayer(
-    `https://api.maptiler.com/maps/streets-v2/256/{z}/{x}/{y}.png?key=${MAP_KEY}`,
-    { maxZoom: 20, attribution: '&copy; OSM & MapTiler' }
-  ).addTo(map);
-} else {
-  L.tileLayer(
-    'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    { maxZoom: 19, attribution: '&copy; OpenStreetMap' }
-  ).addTo(map);
-}
+let tab = localStorage.getItem("tab") || "vols";     // vols|fires
+let pageVols = +(localStorage.getItem("pageVols")||1);
+let pageFires= +(localStorage.getItem("pageFires")||1);
+let collapsed = JSON.parse(localStorage.getItem("collapsed") || (window.matchMedia("(max-width: 940px)").matches ? "true" : "false"));
 
-let geoLayer = null;
-let layerById = {}; // id -> layer
-
-// --- Не сбрасывать вид карты при автообновлении ---
-let userInteracted = false;
-let firstRender = true;
-
-map.on('dragstart', () => userInteracted = true);
-map.on('zoomstart', () => userInteracted = true);
-
-// ---------- форматтеры ----------
-function fmtTS(ts){
-  if(!ts) return '';
-  const d = new Date(ts*1000);
-  return d.toLocaleString();
-}
+/* ===== Helpers ===== */
+function fmtTS(ts){ if(!ts) return ""; return new Date(ts*1000).toLocaleString(); }
 function fmt(v){ return (Math.round(v*1e6)/1e6).toFixed(6); }
+function coordPair(feat){ const [lon,lat]=feat.geometry.coordinates; return `${fmt(lat)}, ${fmt(lon)}`; }
 
 async function copyText(t){
-  try { await navigator.clipboard.writeText(t); alert("Copied"); }
+  try { await navigator.clipboard.writeText(t); }
   catch(e){
-    const ta = document.createElement('textarea');
-    ta.value = t; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta);
-    ta.focus(); ta.select();
-    try{ document.execCommand('copy'); alert("Copied"); }
-    catch(_){ alert("Copy manually:\n"+t); }
-    document.body.removeChild(ta);
+    const ta = document.createElement('textarea'); ta.value=t; ta.style.position='fixed'; ta.style.opacity=0;
+    document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
   }
 }
 
+/* ===== Tile provider: MapTiler (if key) with fallback to OSM ===== */
+function addTiles(m) {
+  const key = (MAP_TILER_KEY||"").trim();
+  const wantMapTiler = (forceTiles === "maptiler") ||
+                       (!forceTiles && key && key !== "__MAP_KEY__" && key.toLowerCase() !== "disable");
+  if (wantMapTiler) {
+    const mtUrl = `https://api.maptiler.com/maps/streets/{z}/{x}/{y}.png?key=${key}`;
+    const layer = L.tileLayer(mtUrl, {
+      maxZoom: 20, tileSize:256, crossOrigin:true,
+      attribution: '&copy; OSM & MapTiler'
+    });
+    layer.on("tileerror", () => {
+      m.removeLayer(layer);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19, attribution:'&copy; OpenStreetMap contributors'
+      }).addTo(m);
+    });
+    layer.addTo(m);
+  } else {
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19, attribution:'&copy; OpenStreetMap contributors'
+    }).addTo(m);
+  }
+}
+
+/* ===== Map init ===== */
+map = L.map('map', { zoomControl:true }).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+addTiles(map);
+
+map.on("movestart zoomstart", ()=>{ movedByUser = true; saveView(); });
+map.on("moveend zoomend", saveView);
+
+function saveView(){
+  const c = map.getCenter();
+  localStorage.setItem("view", JSON.stringify({lat:c.lat, lon:c.lng, z: map.getZoom()}));
+}
+(function restoreView(){
+  const s = localStorage.getItem("view");
+  if (s) {
+    try { const v = JSON.parse(s); map.setView([v.lat, v.lon], v.z); } catch(_) {}
+  }
+})();
+
+/* ===== Sidebar toggle ===== */
+const sidebar = document.getElementById("sidebar");
+const toggle  = document.getElementById("toggle");
+function applyCollapsed(){
+  if (collapsed) { sidebar.classList.add("collapsed"); }
+  else { sidebar.classList.remove("collapsed"); }
+  localStorage.setItem("collapsed", JSON.stringify(collapsed));
+}
+toggle.addEventListener("click", () => { collapsed = !collapsed; applyCollapsed(); });
+applyCollapsed();
+
+/* ===== UI refs ===== */
+const listEl  = document.getElementById("list");
+const prevBtn = document.getElementById("prev");
+const nextBtn = document.getElementById("next");
+const pageInfo= document.getElementById("pageinfo");
+const searchEl= document.getElementById("search");
+const mineEl  = document.getElementById("mine");
+const tabs = document.querySelectorAll(".tab");
+
+/* tabs switching */
+function setTab(t){
+  tab = t; localStorage.setItem("tab", tab);
+  tabs.forEach(x=>x.classList.toggle("active", x.dataset.tab===tab));
+  renderList();
+}
+tabs.forEach(x => x.addEventListener("click", ()=> setTab(x.dataset.tab)));
+setTab(tab);
+
+/* pagination per tab */
+function getPage(){ return tab==="vols" ? pageVols : pageFires; }
+function setPage(n){ if(tab==="vols"){ pageVols=n; localStorage.setItem("pageVols", String(n)); } else { pageFires=n; localStorage.setItem("pageFires", String(n)); } }
+
+/* filters */
+searchEl.addEventListener("input", renderList);
+mineEl.addEventListener("change", renderList);
+
+/* ===== Data render ===== */
 function contactHtml(c){
-  if(!c) return '';
-  if(c.startsWith('@')){
+  if(!c) return "";
+  if (c.startsWith("@")) {
     const u = c.slice(1);
     return ` · <a href="https://t.me/${u}" target="_blank">@${u}</a>`;
   }
-  if(c.startsWith('+')) return ` · <a href="tel:${c}">${c}</a>`;
+  if (c.startsWith("+")) return ` · <a href="tel:${c}">${c}</a>`;
   return ` · ${c}`;
 }
 
-function popupHtml(feature){
-  const pr = feature.properties || {};
-  const lat = feature.geometry.coordinates[1];
-  const lon = feature.geometry.coordinates[0];
-  const title = (pr.type === 'fire') ? '🔥 Fire' : '📍 Volunteer';
-  const coordsText = `${fmt(lat)},${fmt(lon)}`;
-  const gmaps = `https://maps.google.com/?q=${fmt(lat)},${fmt(lon)}`;
-
+function popupHtml(f){
+  const p = f.properties;
+  const coords = coordPair(f);
+  const gmaps = `https://maps.google.com/?q=${coords.replace(' ','')}`;
   let html = `
-    <div style="min-width:240px">
-      <div style="font-weight:600">${title}${contactHtml(pr.contact)}</div>
-      <div class="meta">${fmtTS(pr.ts)}</div>
-      ${pr.text ? `<div style="margin-top:4px">${pr.text}</div>` : ``}
-  `;
-
-  if (pr.type === 'fire' && pr.photo_file_id) {
-    const photoUrl = `/photo/${encodeURIComponent(pr.photo_file_id)}`;
-    html += `<img class="photo" src="${photoUrl}" alt="fire photo" />`;
-  }
-
-  html += `
-      <div style="margin-top:6px">
+    <div style="min-width:220px">
+      <div style="font-weight:600">${p.type==='fire'?'🔥 Fire':'📍 Volunteer'}${contactHtml(p.contact)}</div>
+      <div style="opacity:.75">${fmtTS(p.ts)}</div>
+      ${p.text ? `<div style="margin-top:4px">${p.text}</div>` : ``}
+      ${p.photo_file_id ? `<div style="margin-top:8px"><img src="/photo/${p.photo_file_id}" style="max-width:260px;border-radius:8px;"></div>` : ``}
+      <div style="margin-top:8px; display:flex; gap:8px;">
         <a class="btn" href="${gmaps}" target="_blank">Google Maps</a>
-        <a class="btn" href="#" onclick="copyText('${coordsText}');return false;">Copy</a>
+        <a class="btn" href="#" onclick="copyText('${coords.replace(/\s/g,'')}');return false;">Copy</a>
       </div>
-  `;
-
-  if(uid && sig && pr.user_id && String(pr.user_id) === uid){
-    html += `
-      <div style="margin-top:8px">
-        <a class="btn" href="#" onclick="delEvent(${pr.id});return false;">Delete</a>
-      </div>
-    `;
+    </div>`;
+  if(uid && sig && p.user_id && String(p.user_id)===uid){
+    html += `<div style="margin-top:8px"><a class="btn" href="#" onclick="delEvent(${p.id});return false;">Delete</a></div>`;
   }
-  html += `</div>`;
   return html;
 }
 
 async function delEvent(id){
-  if(!confirm('Delete this point?')) return;
+  if(!confirm("Delete this point?")) return;
   try{
-    const r = await fetch(`/event/${id}?uid=${uid}&sig=${sig}`, {method:'DELETE'});
+    const r = await fetch(`/event/${id}?uid=${uid||""}&sig=${sig||""}`, {method:"DELETE"});
     if(r.ok){ refresh(); }
-    else { alert('Delete failed'); }
-  }catch(e){ console.error(e); alert('Network error'); }
+    else { alert("Failed to delete"); }
+  }catch(e){ console.error(e); alert("Network error"); }
 }
 
-// ---------- Списки + поиск/фильтр + пагинация ----------
-const $tabVol  = document.getElementById('tabVol');
-const $tabFire = document.getElementById('tabFire');
-const $listVol = document.getElementById('listVol');
-const $listFire= document.getElementById('listFire');
-
-const $prev = document.getElementById('prevBtn');
-const $next = document.getElementById('nextBtn');
-const $pageInfo = document.getElementById('pageInfo');
-
-const $q = document.getElementById('q');
-const $onlyMine = document.getElementById('onlyMine');
-
-let activeTab = 'vol'; // 'vol' | 'fire'
-let fullVol = [];  // все features типа volunteer
-let fullFire = []; // все features типа fire
-let volFiltered = [];
-let fireFiltered = [];
-let volPage = 1;
-let firePage = 1;
-
-$tabVol.onclick = () => {
-  activeTab='vol';
-  $tabVol.classList.add('active'); $tabFire.classList.remove('active');
-  $listVol.style.display='block';  $listFire.style.display='none';
-  renderFiltered(); renderPagination(); renderVisiblePage();
-};
-$tabFire.onclick= () => {
-  activeTab='fire';
-  $tabFire.classList.add('active'); $tabVol.classList.remove('active');
-  $listFire.style.display='block';  $listVol.style.display='none';
-  renderFiltered(); renderPagination(); renderVisiblePage();
-};
-
-$prev.onclick = () => {
-  if (activeTab==='vol' && volPage>1) { volPage--; renderVisiblePage(); renderPagination(); }
-  else if (activeTab==='fire' && firePage>1) { firePage--; renderVisiblePage(); renderPagination(); }
-};
-$next.onclick = () => {
-  const totalVolPages  = Math.max(1, Math.ceil(volFiltered.length / PAGE_SIZE));
-  const totalFirePages = Math.max(1, Math.ceil(fireFiltered.length / PAGE_SIZE));
-  if (activeTab==='vol'  && volPage < totalVolPages) { volPage++; renderVisiblePage(); renderPagination(); }
-  if (activeTab==='fire' && firePage < totalFirePages){ firePage++; renderVisiblePage(); renderPagination(); }
-};
-
-$q.addEventListener('input', () => { // быстрый поиск
-  if (activeTab==='vol') volPage = 1; else firePage = 1;
-  renderFiltered(); renderPagination(); renderVisiblePage();
-});
-$onlyMine.addEventListener('change', () => {
-  if (activeTab==='vol') volPage = 1; else firePage = 1;
-  renderFiltered(); renderPagination(); renderVisiblePage();
-});
-
-function h(tag, props={}, children=[]){
-  const el = document.createElement(tag);
-  Object.entries(props||{}).forEach(([k,v]) => {
-    if(k==='class') el.className=v;
-    else if(k==='html') el.innerHTML=v;
-    else el.setAttribute(k,v);
-  });
-  (children||[]).forEach(ch => { if(typeof ch==='string') el.appendChild(document.createTextNode(ch)); else el.appendChild(ch); });
-  return el;
-}
-
-function tsStr(ts){ if(!ts) return ''; const d = new Date(ts*1000); return d.toLocaleString(); }
-
-function focusFeature(id){
-  if(!geoLayer) return;
-  let targetLayer = layerById[id];
-  if(!targetLayer){
-    geoLayer.eachLayer(ly=>{
-      const pr = ly.feature?.properties;
-      if(pr && String(pr.id)===String(id)) targetLayer = ly;
-    });
-  }
-  if(targetLayer){
-    const latlng = targetLayer.getLatLng ? targetLayer.getLatLng()
-                  : L.latLng(targetLayer.feature.geometry.coordinates[1], targetLayer.feature.geometry.coordinates[0]);
-    userInteracted = true; // наша навигация
-    map.setView(latlng, Math.max(map.getZoom(), 15));
-    targetLayer.openPopup && targetLayer.openPopup();
-  }
-}
-
-function matchesQuery(f, q){
+function featureMatches(f){
+  const p = f.properties;
+  const q = searchEl.value.trim().toLowerCase();
+  if (mineEl.checked && uid && String(p.user_id) !== uid) return false;
   if (!q) return true;
-  q = q.toLowerCase();
-  const pr = f.properties || {};
-  const [lon,lat] = f.geometry.coordinates || [];
-  const hay = [
-    pr.contact || '',
-    pr.text || '',
-    String(pr.user_id || ''),
-    (lat!=null && lon!=null) ? `${fmt(lat)}, ${fmt(lon)}` : ''
-  ].join(' ').toLowerCase();
-  return hay.includes(q);
+  const fields = [
+    p.contact||"", p.text||"", String(p.user_id||""), coordPair(f)
+  ].join(" ").toLowerCase();
+  return fields.includes(q);
 }
 
-function isMine(f){
-  if (!$onlyMine.checked) return true;
-  if (!uid) return false; // нет uid — не можем отфильтровать «мои»
-  const pr = f.properties || {};
-  return String(pr.user_id) === String(uid);
+function filtered(){
+  const arr = allFeatures.filter(featureMatches);
+  return tab==="vols" ? arr.filter(x=>x.properties.type==='volunteer')
+                      : arr.filter(x=>x.properties.type==='fire');
 }
 
-function renderFiltered(){
-  // собираем фильтры
-  const q = $q.value.trim();
+function renderList(){
+  const items = filtered();
+  const total = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  let page = Math.min(getPage(), total); if (page<1) page=1; setPage(page);
 
-  // фильтруем и сортируем
-  volFiltered = fullVol.filter(f => isMine(f) && matchesQuery(f, q))
-                       .sort((a,b)=> (b.properties.ts||0)-(a.properties.ts||0));
-  fireFiltered= fullFire.filter(f => isMine(f) && matchesQuery(f, q))
-                       .sort((a,b)=> (b.properties.ts||0)-(a.properties.ts||0));
+  const off = (page-1)*PAGE_SIZE;
+  const slice = items.slice(off, off+PAGE_SIZE);
 
-  // если текущая страница вне диапазона — корректируем
-  const volPages = Math.max(1, Math.ceil(volFiltered.length / PAGE_SIZE));
-  const firePages= Math.max(1, Math.ceil(fireFiltered.length / PAGE_SIZE));
-  if (volPage > volPages) volPage = volPages;
-  if (firePage > firePages) firePage = firePages;
+  listEl.innerHTML = "";
+  slice.forEach(f=>{
+    const p = f.properties;
+    const el = document.createElement("div");
+    el.className = "item";
+    el.innerHTML = `
+      <div>
+        <div><span class="pill">${p.type==='fire'?'🔥 Fire':'📍 Volunteer'}</span> ${contactHtml(p.contact)}</div>
+        <div class="meta">${fmtTS(p.ts)} · ${coordPair(f)}</div>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button class="btn btn-copy">Copy</button>
+        ${uid && String(p.user_id)===uid ? '<button class="btn btn-del">Delete</button>':''}
+      </div>
+    `;
+    el.addEventListener("click", (ev)=>{
+      if (ev.target.closest(".btn")) return; // кнопки обрабатываем отдельно
+      const layer = layerById.get(p.id);
+      if (layer){ map.setView(layer.getLatLng(), Math.max(map.getZoom(), 15)); layer.openPopup(); }
+      collapsed = true; applyCollapsed(); // на мобильном после выбора — спрятать
+    });
+    el.querySelector(".btn-copy").addEventListener("click", (ev)=>{ ev.stopPropagation(); copyText(coordPair(f).replace(/\s/g,'')); });
+    const delBtn = el.querySelector(".btn-del");
+    if (delBtn) delBtn.addEventListener("click", async (ev)=>{ ev.stopPropagation(); await delEvent(p.id); });
+    listEl.appendChild(el);
+  });
+
+  pageInfo.textContent = `${page} / ${total}`;
+  prevBtn.disabled = page<=1; nextBtn.disabled = page>=total;
 }
+prevBtn.addEventListener("click", ()=>{ setPage(getPage()-1); renderList(); });
+nextBtn.addEventListener("click", ()=>{ setPage(getPage()+1); renderList(); });
 
-function renderVisiblePage(){
-  // очистка
-  $listVol.innerHTML = '';
-  $listFire.innerHTML = '';
-
-  // Volunteers
-  const vpStart = (volPage-1)*PAGE_SIZE;
-  const sliceVol = volFiltered.slice(vpStart, vpStart + PAGE_SIZE);
-  for(const f of sliceVol){
-    const pr = f.properties || {};
-    const [lon,lat] = f.geometry.coordinates || [];
-    const el = h('div', {class:'item'});
-    const body = h('div', {class:'body'});
-    body.innerHTML = `<div>📍 ${pr.contact||''}</div><div class="meta">${tsStr(pr.ts)} · ${fmt(lat)}, ${fmt(lon)}</div>`;
-    body.onclick = ()=> focusFeature(pr.id);
-
-    const actions = h('div', {class:'actions'});
-    const btnCopy = h('button', {class:'copy'}, ['Copy']);
-    btnCopy.onclick = (ev)=>{ ev.stopPropagation(); copyText(`${fmt(lat)},${fmt(lon)}`); };
-
-    actions.appendChild(btnCopy);
-    el.appendChild(body);
-    el.appendChild(actions);
-    $listVol.appendChild(el);
-  }
-
-  // Fires
-  const fpStart = (firePage-1)*PAGE_SIZE;
-  const sliceFire = fireFiltered.slice(fpStart, fpStart + PAGE_SIZE);
-  for(const f of sliceFire){
-    const pr = f.properties || {};
-    const [lon,lat] = f.geometry.coordinates || [];
-    const el = h('div', {class:'item'});
-    const body = h('div', {class:'body'});
-    body.innerHTML = `<div>🔥 ${pr.contact||''}</div><div class="meta">${tsStr(pr.ts)} · ${fmt(lat)}, ${fmt(lon)}</div>`;
-    body.onclick = ()=> focusFeature(pr.id);
-
-    const actions = h('div', {class:'actions'});
-    const btnCopy = h('button', {class:'copy'}, ['Copy']);
-    btnCopy.onclick = (ev)=>{ ev.stopPropagation(); copyText(`${fmt(lat)},${fmt(lon)}`); };
-
-    actions.appendChild(btnCopy);
-    el.appendChild(body);
-    el.appendChild(actions);
-    $listFire.appendChild(el);
-  }
-
-  // показать активную вкладку
-  if (activeTab==='vol') { $listVol.style.display='block'; $listFire.style.display='none'; }
-  else { $listVol.style.display='none'; $listFire.style.display='block'; }
-}
-
-function renderPagination(){
-  const totalVolPages  = Math.max(1, Math.ceil(volFiltered.length / PAGE_SIZE));
-  const totalFirePages = Math.max(1, Math.ceil(fireFiltered.length / PAGE_SIZE));
-  const page  = (activeTab==='vol') ? volPage : firePage;
-  const total = (activeTab==='vol') ? totalVolPages : totalFirePages;
-
-  $pageInfo.textContent = `${page} / ${total}`;
-  $prev.disabled = (page<=1);
-  $next.disabled = (page>=total);
+function buildLayer(data){
+  if(geoLayer){ geoLayer.remove(); layerById.clear(); }
+  geoLayer = L.geoJSON(data, {
+    pointToLayer: (f, latlng) => {
+      const typ = f.properties.type;
+      const color = (typ==='fire') ? '#e53935' : '#1e88e5';
+      return L.circleMarker(latlng, { radius:8, color, weight:2, fillColor:color, fillOpacity:.6 });
+    },
+    onEachFeature: (f, layer) => {
+      layer.bindPopup(popupHtml(f));
+      layerById.set(f.properties.id, layer);
+    }
+  }).addTo(map);
 }
 
 async function refresh(){
   try{
     const r = await fetch('/geojson', {cache:'no-store'});
     const data = await r.json();
+    allFeatures = data.features||[];
+    const hadUserMove = movedByUser;
 
-    // Сохраняем текущий вид, если пользователь уже двигал карту
-    const currentCenter = map.getCenter();
-    const currentZoom = map.getZoom();
+    buildLayer(data);
+    renderList();
 
-    if(geoLayer){ geoLayer.remove(); }
-    layerById = {};
-
-    geoLayer = L.geoJSON(data, {
-      pointToLayer: (f, latlng) => {
-        const typ = f.properties?.type;
-        const color = (typ==='fire') ? '#e53935' : '#1e88e5';
-        return L.circleMarker(latlng, { radius:8, color, weight:2, fillColor:color, fillOpacity:.6 });
-      },
-      onEachFeature: (f, layer) => {
-        const id = f.properties?.id;
-        if(id!=null) layerById[id] = layer;
-        layer.bindPopup(popupHtml(f));
-      }
-    }).addTo(map);
-
-    // разобьём на два массива
-    fullVol = [];
-    fullFire = [];
-    for (const f of (data.features || [])) {
-      const pr = f.properties || {};
-      if (pr.type === 'fire') fullFire.push(f);
-      else fullVol.push(f);
-    }
-
-    // применяем фильтры + страницы
-    renderFiltered();
-    renderVisiblePage();
-    renderPagination();
-
-    // Управление видом: только при первом рендере, если пользователь ещё не двигал
-    if (data.features.length){
-      if (firstRender && !userInteracted) {
-        const b = geoLayer.getBounds();
-        if(b.isValid()) map.fitBounds(b.pad(0.2));
-      }
-      if (focusId){
-        const feat = (data.features || []).find(x => String(x.properties.id) === String(focusId));
+    if(!hadUserMove){
+      if(focusId){
+        const feat = allFeatures.find(x=>String(x.properties.id)===String(focusId));
         if (feat){
-          const latlng = L.latLng(feat.geometry.coordinates[1], feat.geometry.coordinates[0]);
-          map.setView(latlng, 16);
+          const [lon,lat]=feat.geometry.coordinates;
+          map.setView([lat,lon], 16);
+          const layer = layerById.get(feat.properties.id); if(layer) layer.openPopup();
         }
+      } else if (allFeatures.length) {
+        const b = geoLayer.getBounds(); if (b.isValid()) map.fitBounds(b.pad(0.2));
+      } else {
+        // оставляем вид как есть
       }
-    } else {
-      if (firstRender) map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
     }
-
-    // Если пользователь уже двигал — возвращаем прежний вид
-    if (!firstRender && userInteracted) {
-      map.setView(currentCenter, currentZoom, {animate:false});
-    }
-
-    firstRender = false;
-  }catch(e){
-    console.error("refresh failed", e);
-  }
+  }catch(e){ console.error("refresh failed", e); }
 }
 
 refresh();
