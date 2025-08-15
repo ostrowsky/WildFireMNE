@@ -74,9 +74,10 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
-    const DEFAULT_CENTER = [__LAT__, __LON__];
-    const DEFAULT_ZOOM   = __ZOOM__;
-    const MAP_TILER_KEY  = "__MAP_KEY__";
+    const DEFAULT_CENTER = [42.179, 18.942];
+    const DEFAULT_ZOOM   = 12;
+    // демонстрационный ключ; можно выключить MapTiler, установив переменную окружения, а здесь оставить как есть
+    const MAP_TILER_KEY  = "SC5bBhZz9sPQyDQTyEez";
     const AUTO_REFRESH_MS = 30000;
 
     const urlParams = new URLSearchParams(location.search);
@@ -85,47 +86,93 @@
     const focusId = urlParams.get("focus");
     const NO_BASE = urlParams.get("nobase")==='1';
 
+    // карта + базовые тайлы
     const map = L.map('map', { zoomControl:true }).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
     if(!NO_BASE){
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'&copy; OpenStreetMap contributors' }).addTo(map);
       const key=(MAP_TILER_KEY||'').trim();
-      if(key && key!=='__MAP_KEY__' && key.toLowerCase()!=='disable'){
-        const mt=L.tileLayer(`https://api.maptiler.com/maps/streets/{z}/{x}/{y}.png?key=${key}`,{maxZoom:20}); mt.on('tileerror',()=>{}); mt.addTo(map);
+      if(key && key!=='SC5bBhZz9sPQyDQTyEez' && key.toLowerCase()!=='disable'){
+        const mt=L.tileLayer(`https://api.maptiler.com/maps/streets/{z}/{x}/{y}.png?key=${key}`,{maxZoom:20});
+        mt.on('tileerror',()=>{});
+        mt.addTo(map);
       }
     }
 
+    // сохранение выбранного пользователем масштаба/позиции
     let userTouched=false, savedView={center:map.getCenter(), zoom:map.getZoom()};
     map.on('moveend zoomend', ()=>{ userTouched=true; savedView={center:map.getCenter(), zoom:map.getZoom()} });
 
-    const sidebar=document.getElementById('sidebar'); const toggleFab=document.getElementById('toggleFab');
-    function setCollapsed(v){ if(v) sidebar.classList.add('collapsed'); else sidebar.classList.remove('collapsed'); localStorage.setItem('sidebarCollapsed', v?'1':'0'); setTimeout(()=>map.invalidateSize(),200); }
+    // боковая панель (складывается)
+    const sidebar=document.getElementById('sidebar'), toggleFab=document.getElementById('toggleFab');
+    function setCollapsed(v){
+      if(v) sidebar.classList.add('collapsed'); else sidebar.classList.remove('collapsed');
+      localStorage.setItem('sidebarCollapsed', v?'1':'0');
+      setTimeout(()=>map.invalidateSize(),200);
+    }
     const initCollapsed = localStorage.getItem('sidebarCollapsed')==='1' || window.matchMedia('(max-width:820px)').matches;
     setCollapsed(initCollapsed);
     toggleFab.onclick=()=>setCollapsed(!sidebar.classList.contains('collapsed'));
 
+    // элементы управления списком
     const tabVol=document.getElementById('tabVol'), tabFire=document.getElementById('tabFire');
     const listEl=document.getElementById('list'), searchEl=document.getElementById('search');
     const onlyMineEl=document.getElementById('onlyMine'), prevBtn=document.getElementById('prevBtn');
     const nextBtn=document.getElementById('nextBtn'), pageInfo=document.getElementById('pageInfo');
     const hotToggle=document.getElementById('hotToggle');
 
-    let activeTab=localStorage.getItem('activeTab')||'vol', pageVol=+(localStorage.getItem('pageVol')||1), pageFire=+(localStorage.getItem('pageFire')||1);
+    let activeTab=localStorage.getItem('activeTab')||'vol';
+    let pageVol=+(localStorage.getItem('pageVol')||1), pageFire=+(localStorage.getItem('pageFire')||1);
     const PAGE_SIZE=15;
 
-    function setActiveTab(t){ activeTab=t; tabVol.classList.toggle('active', t==='vol'); tabFire.classList.toggle('active', t==='fire'); localStorage.setItem('activeTab',t); renderList(); }
-    tabVol.onclick=()=>setActiveTab('vol'); tabFire.onclick=()=>setActiveTab('fire');
-    searchEl.oninput=renderList; onlyMineEl.onchange=renderList;
+    function setActiveTab(t){
+      activeTab=t;
+      tabVol.classList.toggle('active', t==='vol');
+      tabFire.classList.toggle('active', t==='fire');
+      localStorage.setItem('activeTab',t);
+      renderList();
+    }
+    tabVol.onclick=()=>setActiveTab('vol');
+    tabFire.onclick=()=>setActiveTab('fire');
+    searchEl.oninput=renderList;
+    onlyMineEl.onchange=renderList;
     function persist(){ localStorage.setItem('pageVol', String(pageVol)); localStorage.setItem('pageFire', String(pageFire)); }
-    prevBtn.onclick=()=>{ if(activeTab==='vol') pageVol=Math.max(1,pageVol-1); else pageFire=Math.max(1,pageFire-1); persist(); renderList(); };
-    nextBtn.onclick=()=>{ const total=getFiltered(activeTab).length, max=Math.max(1, Math.ceil(total/PAGE_SIZE)); if(activeTab==='vol') pageVol=Math.min(max,pageVol+1); else pageFire=Math.min(max,pageFire+1); persist(); renderList(); };
+    prevBtn.onclick=()=>{
+      if(activeTab==='vol') pageVol=Math.max(1,pageVol-1);
+      else pageFire=Math.max(1,pageFire-1);
+      persist(); renderList();
+    };
+    nextBtn.onclick=()=>{
+      const total=getFiltered(activeTab).length;
+      const max=Math.max(1, Math.ceil(total/PAGE_SIZE));
+      if(activeTab==='vol') pageVol=Math.min(max,pageVol+1);
+      else pageFire=Math.min(max,pageFire+1);
+      persist(); renderList();
+    };
 
+    // утилиты
     function fmt(v){ return (Math.round(v*1e6)/1e6).toFixed(6) }
     function ts(t){ try{ return new Date(t*1000).toLocaleString() }catch(_){ return '' } }
-    async function copyText(s){ try{ await navigator.clipboard.writeText(s); alert('Copied'); }catch(_){ const ta=document.createElement('textarea'); ta.value=s; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); alert('Copied'); } }
-    async function delEvent(id){ if(!confirm('Delete this point?')) return; const r=await fetch(`/event/${id}?uid=${uid||''}&sig=${sig||''}`,{method:'DELETE'}); if(r.ok) await refresh(); else alert('Failed to delete'); }
-    async function delLive(userId){ if(!confirm('Stop live tracking?')) return; const r=await fetch(`/live/${userId}?uid=${uid||''}&sig=${sig||''}`,{method:'DELETE'}); if(r.ok) await refresh(); else alert('Failed to stop live'); }
+    async function copyText(s){
+      try{ await navigator.clipboard.writeText(s); alert('Copied'); }
+      catch(_){
+        const ta=document.createElement('textarea');
+        ta.value=s; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta);
+        ta.select(); document.execCommand('copy'); document.body.removeChild(ta); alert('Copied');
+      }
+    }
+    async function delEvent(id){
+      if(!confirm('Delete this point?')) return;
+      const r=await fetch(`/event/${id}?uid=${uid||''}&sig=${sig||''}`,{method:'DELETE'});
+      if(r.ok) await refresh(); else alert('Failed to delete');
+    }
+    async function delLive(userId){
+      if(!confirm('Stop live tracking?')) return;
+      const r=await fetch(`/live/${userId}?uid=${uid||''}&sig=${sig||''}`,{method:'DELETE'});
+      if(r.ok) await refresh(); else alert('Failed to stop live');
+    }
     window.copyText=copyText; window.delEvent=delEvent; window.delLive=delLive;
 
+    // данные и слои
     let features=[], geoLayer=null, layerById=new Map(), hotspotsLayer=null;
 
     function stylePoint(f){
@@ -150,30 +197,42 @@
       return html + `</div>`;
     }
 
+    function featureKey(f){
+      const p=f.properties;
+      return String(p.id ?? `${p.type}:${p.user_id ?? Math.random()}`);
+    }
+
     function attach(data){
       if(geoLayer){ geoLayer.remove(); layerById.clear(); }
       geoLayer=L.geoJSON(data,{
         pointToLayer:(f,latlng)=>L.circleMarker(latlng, stylePoint(f)),
-        onEachFeature:(f,l)=>{ l.bindPopup(popupHtml(f)); layerById.set(String(f.properties.id), l); }
+        onEachFeature:(f,l)=>{ l.bindPopup(popupHtml(f)); layerById.set(featureKey(f), l); }
       }).addTo(map);
 
       if(!userTouched){
-        if(data.features.length){ const b=geoLayer.getBounds(); if(b.isValid()) map.fitBounds(b.pad(0.2)); }
-        else map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
-      }else{
+        if(data.features.length){
+          const b=geoLayer.getBounds(); if(b.isValid()) map.fitBounds(b.pad(0.2));
+        } else {
+          map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+        }
+      } else {
         map.setView(savedView.center, savedView.zoom, {animate:false});
       }
 
-      if(focusId && layerById.has(String(focusId))){
-        const lyr=layerById.get(String(focusId)); const ll=lyr.getLatLng();
-        map.setView(ll, Math.max(16, savedView.zoom||DEFAULT_ZOOM)); lyr.openPopup();
+      if(focusId){
+        for(const f of data.features){
+          const k=featureKey(f);
+          if(String(f.properties.id)===String(focusId) || k===String(focusId)){
+            const lyr=layerById.get(k); if(lyr){ const ll=lyr.getLatLng(); map.setView(ll, Math.max(16, savedView.zoom||DEFAULT_ZOOM)); lyr.openPopup(); }
+            break;
+          }
+        }
       }
     }
 
     function byType(t){ return features.filter(f=>f.properties.type===t) }
-    function volunteersCombined(){
-      return features.filter(f=>f.properties.type==='volunteer' || f.properties.type==='volunteer_live');
-    }
+    function volunteersCombined(){ return features.filter(f=>f.properties.type==='volunteer' || f.properties.type==='volunteer_live'); }
+
     function getFiltered(tab){
       const q=(searchEl.value||'').toLowerCase(); const mine=onlyMineEl.checked && uid;
       const arr = (tab==='vol') ? volunteersCombined() : byType('fire');
@@ -190,14 +249,14 @@
     }
 
     function renderList(){
-      const PAGE_SIZE=15;
       const pool=getFiltered(activeTab);
-      let page=(activeTab==='vol')?+(localStorage.getItem('pageVol')||1):+(localStorage.getItem('pageFire')||1);
+      let page=(activeTab==='vol')?pageVol:pageFire;
       const totalPages=Math.max(1, Math.ceil(pool.length/PAGE_SIZE));
       page = Math.min(page, totalPages);
-      if(activeTab==='vol') localStorage.setItem('pageVol', String(page)); else localStorage.setItem('pageFire', String(page));
-      const start=(page-1)*PAGE_SIZE, items=pool.slice(start, start+PAGE_SIZE);
+      if(activeTab==='vol') pageVol=page; else pageFire=page;
+      persist();
 
+      const start=(page-1)*PAGE_SIZE, items=pool.slice(start, start+PAGE_SIZE);
       listEl.innerHTML = items.length? '' : '<div class="muted" style="padding:12px">No items.</div>';
       for(const f of items){
         const p=f.properties, lat=f.geometry.coordinates[1], lon=f.geometry.coordinates[0];
@@ -208,7 +267,11 @@
             ? (p.type==='volunteer_live' ? '<button class="btn btn-del">Stop</button>' : '<button class="btn btn-del">Delete</button>')
             : ''
         }</div>`;
-        el.addEventListener('click', (e)=>{ if((e.target).closest('.actions')) return; const lyr=layerById.get(String(p.id)); if(lyr){ const ll=lyr.getLatLng(); map.setView(ll, Math.max(16, map.getZoom())); lyr.openPopup(); }});
+        el.addEventListener('click', (e)=>{
+          if((e.target).closest('.actions')) return;
+          const lyr=layerById.get(featureKey(f));
+          if(lyr){ const ll=lyr.getLatLng(); map.setView(ll, Math.max(16, map.getZoom())); lyr.openPopup(); }
+        });
         el.querySelector('.btn-copy').onclick=(e)=>{ e.stopPropagation(); copyText(`${fmt(lat)}, ${fmt(lon)}`); };
         const delBtn=el.querySelector('.btn-del');
         if(delBtn) delBtn.onclick=(e)=>{ e.stopPropagation(); (p.type==='volunteer_live') ? delLive(p.user_id) : delEvent(p.id); };
@@ -218,6 +281,7 @@
       prevBtn.disabled = (page<=1); nextBtn.disabled = (page>=totalPages);
     }
 
+    // NASA FIRMS
     async function loadHotspots(){
       try{
         const r=await fetch('/hotspots', {cache:'no-store'}); const gj=await r.json();
@@ -231,18 +295,25 @@
     }
     hotToggle.checked = localStorage.getItem('hotspotsEnabled')==='1';
     if(hotToggle.checked) loadHotspots();
-    hotToggle.onchange = ()=>{ localStorage.setItem('hotspotsEnabled', hotToggle.checked?'1':'0'); if(hotToggle.checked) loadHotspots(); else if(hotspotsLayer){ hotspotsLayer.remove(); hotspotsLayer=null; } };
+    hotToggle.onchange = ()=>{
+      localStorage.setItem('hotspotsEnabled', hotToggle.checked?'1':'0');
+      if(hotToggle.checked) loadHotspots();
+      else if(hotspotsLayer){ hotspotsLayer.remove(); hotspotsLayer=null; }
+    };
     setInterval(()=>{ if(hotToggle.checked) loadHotspots(); }, 5*60*1000);
 
+    // основной рефреш
     async function refresh(){
       try{
         const r=await fetch('/geojson', {cache:'no-store'});
         const data=await r.json();
-        features=data.features||[]; attach(data); renderList();
+        features=data.features||[];
+        attach(data);
+        renderList();
       }catch(e){ console.error('refresh failed', e); }
     }
 
-    let activeTab = localStorage.getItem('activeTab') || 'vol';
+    // старт
     setActiveTab(activeTab);
     refresh();
     setInterval(refresh, AUTO_REFRESH_MS);
