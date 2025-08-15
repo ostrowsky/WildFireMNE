@@ -2,14 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Live Map</title>
+  <title>Live Map (no tiles)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
-    html, body { height:100%; margin:0; }
-    #map { position:absolute; inset:0; }
+    html, body { height:100%; margin:0; background:#f3f4f6; }
+    #map { position:absolute; inset:0; background:#e9ecef; }
 
-    /* Legend */
     .legend {
       position:absolute; right:12px; top:12px; z-index:600;
       background:#fff; padding:10px 12px; border-radius:12px;
@@ -20,14 +19,16 @@
     .pill{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle }
     .red{ background:#e53935 } .blue{ background:#1e88e5 } .orange{ background:#ff6d00 }
 
-    /* Toggle button (always visible) */
+    .legend .row{ display:flex; align-items:center; gap:8px; margin-top:6px }
+    .legend input[type="checkbox"]{ transform: translateY(1px) }
+    .legend .btn{ margin-top:8px; display:inline-block; padding:6px 10px; border:1px solid #e1e5ea; border-radius:8px; background:#fff; cursor:pointer; font-size:13px }
+
     .toggle-fab{
       position:absolute; right:12px; top:72px; z-index:650;
       border:1px solid #e1e5ea; border-radius:22px; padding:8px 12px; background:#fff; cursor:pointer;
       box-shadow:0 2px 10px rgba(0,0,0,.15);
     }
 
-    /* Sidebar */
     .sidebar{
       position:absolute; right:12px; top:112px; bottom:12px; z-index:640;
       width:320px; max-width:calc(100vw - 24px);
@@ -55,10 +56,6 @@
     .pager{ display:flex; align-items:center; justify-content:space-between; padding:8px 12px 12px }
     .muted{ color:#6b7280 }
 
-    /* Hotspots toggle inside legend */
-    .legend .row{ display:flex; align-items:center; gap:8px; margin-top:6px }
-    .legend input[type="checkbox"]{ transform: translateY(1px) }
-
     @media (max-width:820px){
       .sidebar{ width:min(92vw, 360px); top:112px }
     }
@@ -74,6 +71,7 @@
     <div class="row"><span class="pill orange"></span>NASA FIRMS
       <label style="margin-left:8px"><input id="hotToggle" type="checkbox" /> show</label>
     </div>
+    <button id="tilesBtn" class="btn">Show base map</button>
   </div>
 
   <button id="toggleFab" class="toggle-fab">☰ Lists</button>
@@ -97,10 +95,11 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
-    // ---- values will be templated by backend ----
+    // Backend injects these placeholders
     const DEFAULT_CENTER = [__LAT__, __LON__];
     const DEFAULT_ZOOM   = __ZOOM__;
-    const MAP_TILER_KEY  = "__MAP_KEY__";     // may be empty
+    const MAP_TILER_KEY  = "__MAP_KEY__";               // optional
+    const HOTSPOTS_DEFAULT = __HOT_DEF__;               // 0/1
     const AUTO_REFRESH_MS = 30000;
 
     const urlParams = new URLSearchParams(location.search);
@@ -108,253 +107,132 @@
     const uid = urlParams.get("uid");
     const sig = urlParams.get("sig");
 
-    // --- map init: ALWAYS add OSM first (guaranteed), then try MapTiler as optional
-    const map = L.map('map', { zoomControl: true }).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
-    const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
-    }).addTo(map);
+    // map without tiles
+    const map = L.map('map', { zoomControl: true, attributionControl:false }).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+    let baseAdded = false, osmLayer = null, mtLayer = null;
 
-    (function maybeMapTiler(){
-      const key = (MAP_TILER_KEY || "").trim();
-      if (!key || key === "__MAP_KEY__" || key.toLowerCase() === "disable") return;
-      const mt = L.tileLayer(`https://api.maptiler.com/maps/streets/{z}/{x}/{y}.png?key=${key}`, {
-        maxZoom: 20, tileSize: 256, crossOrigin: true, attribution: '&copy; OpenStreetMap & MapTiler'
-      });
-      mt.on('tileerror', () => { /* ignore, OSM already present */ });
-      mt.addTo(map);
-    })();
+    // add tiles on demand
+    function addTiles(){
+      if (baseAdded) return;
+      baseAdded = true;
+      try{
+        osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19 }).addTo(map);
+      }catch(e){ console.warn('OSM tiles failed', e); }
+      const key = (MAP_TILER_KEY||'').trim();
+      if (key && key !== '__MAP_KEY__' && key.toLowerCase() !== 'disable'){
+        try{
+          mtLayer = L.tileLayer(`https://api.maptiler.com/maps/streets/{z}/{x}/{y}.png?key=${key}`, { maxZoom:20, tileSize:256, crossOrigin:true });
+          mtLayer.addTo(map);
+        }catch(e){ console.warn('MapTiler failed', e); }
+      }
+    }
+    document.getElementById('tilesBtn').addEventListener('click', ()=>{
+      addTiles();
+      document.getElementById('tilesBtn').textContent = 'Base map ON';
+      setTimeout(()=>map.invalidateSize(),200);
+    });
 
-    // ---- persistent view
-    let userTouchedView = false;
-    let savedView = { center: map.getCenter(), zoom: map.getZoom() };
-    map.on('moveend zoomend', () => { userTouchedView = true; savedView = { center: map.getCenter(), zoom: map.getZoom() }; });
+    // persist view
+    let userTouchedView=false;
+    let savedView={center:map.getCenter(), zoom:map.getZoom()};
+    map.on('moveend zoomend', ()=>{ userTouchedView=true; savedView={center:map.getCenter(), zoom:map.getZoom()}; });
 
-    // ---- sidebar toggle (always-visible FAB)
+    // sidebar toggle (persist)
     const sidebar = document.getElementById('sidebar');
     const toggleFab = document.getElementById('toggleFab');
-    function setSidebarCollapsed(collapsed){
-      if (collapsed) sidebar.classList.add('collapsed'); else sidebar.classList.remove('collapsed');
-      localStorage.setItem('sidebarCollapsed', collapsed ? '1' : '0');
-      setTimeout(() => map.invalidateSize(), 200);
-    }
-    const initialCollapsed = localStorage.getItem('sidebarCollapsed') === '1' ||
-      window.matchMedia('(max-width:820px)').matches;
-    setSidebarCollapsed(initialCollapsed);
-    toggleFab.addEventListener('click', () => setSidebarCollapsed(!sidebar.classList.contains('collapsed')));
+    function setSidebarCollapsed(c){ if(c) sidebar.classList.add('collapsed'); else sidebar.classList.remove('collapsed'); localStorage.setItem('sidebarCollapsed', c?'1':'0'); setTimeout(()=>map.invalidateSize(),200); }
+    setSidebarCollapsed(localStorage.getItem('sidebarCollapsed')==='1' || window.matchMedia('(max-width:820px)').matches);
+    toggleFab.addEventListener('click', ()=> setSidebarCollapsed(!sidebar.classList.contains('collapsed')));
 
-    // ---- UI elements
-    const tabVol = document.getElementById('tabVol');
-    const tabFire = document.getElementById('tabFire');
-    const listEl = document.getElementById('list');
-    const searchEl = document.getElementById('search');
-    const onlyMineEl = document.getElementById('onlyMine');
-    const prevBtn = document.getElementById('prevBtn');
-    const nextBtn = document.getElementById('nextBtn');
-    const pageInfo = document.getElementById('pageInfo');
-    const hotToggle = document.getElementById('hotToggle');
+    // UI elts
+    const tabVol=document.getElementById('tabVol'), tabFire=document.getElementById('tabFire');
+    const listEl=document.getElementById('list'), searchEl=document.getElementById('search'), onlyMineEl=document.getElementById('onlyMine');
+    const prevBtn=document.getElementById('prevBtn'), nextBtn=document.getElementById('nextBtn'), pageInfo=document.getElementById('pageInfo');
+    const hotToggle=document.getElementById('hotToggle');
 
-    let activeTab = localStorage.getItem('activeTab') || 'vol';
-    let pageVol = +(localStorage.getItem('pageVol') || 1);
-    let pageFire = +(localStorage.getItem('pageFire') || 1);
-    const PAGE_SIZE = 15;
+    let activeTab=localStorage.getItem('activeTab')||'vol';
+    let pageVol=+(localStorage.getItem('pageVol')||1), pageFire=+(localStorage.getItem('pageFire')||1);
+    const PAGE_SIZE=15;
 
-    function setActiveTab(t){
-      activeTab = t;
-      tabVol.classList.toggle('active', t==='vol');
-      tabFire.classList.toggle('active', t==='fire');
-      localStorage.setItem('activeTab', t);
-      renderList();
-    }
-    tabVol.onclick = () => setActiveTab('vol');
-    tabFire.onclick = () => setActiveTab('fire');
-    searchEl.addEventListener('input', renderList);
-    onlyMineEl.addEventListener('change', renderList);
-    prevBtn.addEventListener('click', () => { if (activeTab==='vol') pageVol=Math.max(1,pageVol-1); else pageFire=Math.max(1,pageFire-1); persistPages(); renderList(); });
-    nextBtn.addEventListener('click', () => {
-      const total = getFiltered(activeTab).length, maxPage = Math.max(1, Math.ceil(total/PAGE_SIZE));
-      if (activeTab==='vol') pageVol=Math.min(maxPage,pageVol+1); else pageFire=Math.min(maxPage,pageFire+1);
-      persistPages(); renderList();
-    });
-    function persistPages(){ localStorage.setItem('pageVol', String(pageVol)); localStorage.setItem('pageFire', String(pageFire)); }
+    function setActiveTab(t){ activeTab=t; tabVol.classList.toggle('active',t==='vol'); tabFire.classList.toggle('active',t==='fire'); localStorage.setItem('activeTab',t); renderList(); }
+    tabVol.onclick=()=>setActiveTab('vol'); tabFire.onclick=()=>setActiveTab('fire');
+    searchEl.oninput=renderList; onlyMineEl.onchange=renderList;
+    prevBtn.onclick=()=>{ if(activeTab==='vol') pageVol=Math.max(1,pageVol-1); else pageFire=Math.max(1,pageFire-1); persistPages(); renderList(); };
+    nextBtn.onclick=()=>{ const total=getFiltered(activeTab).length, maxP=Math.max(1,Math.ceil(total/PAGE_SIZE)); if(activeTab==='vol') pageVol=Math.min(maxP,pageVol+1); else pageFire=Math.min(maxP,pageFire+1); persistPages(); renderList(); };
+    function persistPages(){ localStorage.setItem('pageVol',String(pageVol)); localStorage.setItem('pageFire',String(pageFire)); }
 
     function fmtTS(ts){ if(!ts) return ''; try{ return new Date(ts*1000).toLocaleString(); }catch(_){ return ''} }
     function fmt(v){ return (Math.round(v*1e6)/1e6).toFixed(6); }
+    async function copyText(t){ try{ await navigator.clipboard.writeText(t); alert('Copied'); } catch(e){ const ta=document.createElement('textarea'); ta.value=t; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); }catch(_){} document.body.removeChild(ta); alert('Copied'); } }
+    async function delEvent(id){ if(!confirm('Delete this point?')) return; try{ const r=await fetch(`/event/${id}?uid=${uid||''}&sig=${sig||''}`,{method:'DELETE'}); if(r.ok){ await refresh(); } else alert('Failed to delete'); }catch(e){ console.error(e); alert('Network error'); } }
 
-    async function copyText(t){
-      try{ await navigator.clipboard.writeText(t); alert('Copied'); }
-      catch(e){
-        const ta=document.createElement('textarea'); ta.value=t; ta.style.position='fixed'; ta.style.opacity='0';
-        document.body.appendChild(ta); ta.select(); try{ document.execCommand('copy'); }catch(_){}
-        document.body.removeChild(ta); alert('Copied');
-      }
-    }
-
-    async function delEvent(id){
-      if(!confirm('Delete this point?')) return;
-      try{
-        const r = await fetch(`/event/${id}?uid=${uid||''}&sig=${sig||''}`, {method:'DELETE'});
-        if(r.ok){ await refresh(); } else alert('Failed to delete');
-      }catch(e){ console.error(e); alert('Network error'); }
-    }
-    window.copyText = copyText;
-    window.delEvent = delEvent;
-
-    // ---- app data & layers
-    let features = [];
-    function byType(t){ return features.filter(f => f.properties.type === t); }
+    let features=[]; let geoLayer=null; const layerById=new Map();
+    function byType(t){ return features.filter(f=>f.properties.type===t); }
     function getFiltered(tab){
-      const q = (searchEl.value||'').toLowerCase();
-      const mine = onlyMineEl.checked && uid;
-      const arr = (tab==='vol') ? byType('volunteer') : byType('fire');
-      return arr.filter(f=>{
-        const p=f.properties;
-        let ok=true;
-        if(mine) ok = ok && (String(p.user_id)===String(uid));
-        if(q){
-          const hay=[p.contact||'', p.text||'', String(p.user_id||''), String(p.id||''), String(f.geometry.coordinates[1]), String(f.geometry.coordinates[0])].join(' ').toLowerCase();
-          ok = ok && hay.includes(q);
-        }
-        return ok;
-      });
+      const q=(searchEl.value||'').toLowerCase(); const mine=onlyMineEl.checked&&uid;
+      const src=(tab==='vol')?byType('volunteer'):byType('fire');
+      return src.filter(f=>{ const p=f.properties; let ok=true; if(mine) ok=ok && (String(p.user_id)===String(uid)); if(q){ const hay=[p.contact||'',p.text||'',String(p.user_id||''),String(p.id||''),String(f.geometry.coordinates[1]),String(f.geometry.coordinates[0])].join(' ').toLowerCase(); ok=ok && hay.includes(q); } return ok; });
     }
-
-    let geoLayer=null, layerById=new Map();
-    function pointStyle(f){
-      const color = (f.properties.type==='fire')? '#e53935' : '#1e88e5';
-      return { radius:8, color, weight:2, fillColor:color, fillOpacity:.6 };
-    }
+    function pointStyle(f){ const c=(f.properties.type==='fire')?'#e53935':'#1e88e5'; return {radius:8,color:c,weight:2,fillColor:c,fillOpacity:.6}; }
     function popupHtml(f){
       const p=f.properties, lat=f.geometry.coordinates[1], lon=f.geometry.coordinates[0];
-      const title = (p.type==='fire') ? '🔥 Fire' : '📍 Volunteer';
-      const gmaps = `https://maps.google.com/?q=${fmt(lat)},${fmt(lon)}`;
-      let html = `<div style="min-width:220px">
-        <div style="font-weight:600">${title}${p.contact?` · ${p.contact.startsWith('@')?`<a href='https://t.me/${p.contact.slice(1)}' target='_blank'>${p.contact}</a>`:p.contact}:''}</div>
-        <div style="opacity:.8">${fmtTS(p.ts)}</div>
-        ${p.text?`<div style="margin-top:4px">${p.text}</div>`:''}
-        ${p.type==='fire'&&p.photo_file_id?`<div style="margin-top:6px"><img src="/photo/${p.photo_file_id}" style="max-width:260px;border-radius:8px"/></div>`:''}
-        <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
-          <a class="btn" href="${gmaps}" target="_blank">Google Maps</a>
-          <a class="btn" href="#" onclick="copyText('${fmt(lat)}, ${fmt(lon)}');return false;">Copy Coordinates</a>
-        </div>`;
-      if(uid&&sig&&p.user_id&&String(p.user_id)===String(uid)){
-        html+=`<div style="margin-top:8px"><a class="btn" href="#" onclick="delEvent(${p.id});return false;">Delete</a></div>`;
-      }
-      return html + `</div>`;
+      const title=(p.type==='fire')?'🔥 Fire':'📍 Volunteer';
+      const gmaps=`https://maps.google.com/?q=${fmt(lat)},${fmt(lon)}`;
+      let h=`<div style="min-width:220px"><div style="font-weight:600">${title}${p.contact?` · ${p.contact.startsWith('@')?`<a href='https://t.me/${p.contact.slice(1)}' target='_blank'>${p.contact}</a>`:p.contact}:''}</div><div style="opacity:.8">${fmtTS(p.ts)}</div>${p.text?`<div style='margin-top:4px'>${p.text}</div>`:''}${p.type==='fire'&&p.photo_file_id?`<div style='margin-top:6px'><img src="/photo/${p.photo_file_id}" style="max-width:260px;border-radius:8px"/></div>`:''}<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"><a class="btn" href="${gmaps}" target="_blank">Google Maps</a><a class="btn" href="#" onclick="navigator.clipboard.writeText('${fmt(lat)}, ${fmt(lon)}');return false;">Copy</a></div>`;
+      if(uid&&p.user_id&&String(p.user_id)===String(uid)) h+=`<div style="margin-top:8px"><a class="btn" href="#" onclick="fetch('/event/${p.id}?uid=${uid}&sig=${sig}',{method:'DELETE'}).then(()=>location.reload())">Delete</a></div>`;
+      return h+`</div>`;
     }
-
     function attachLayer(data){
       if(geoLayer){ geoLayer.remove(); layerById.clear(); }
-      geoLayer = L.geoJSON(data,{
-        pointToLayer:(f,latlng)=>L.circleMarker(latlng, pointStyle(f)),
-        onEachFeature:(f,layer)=>{ layer.bindPopup(popupHtml(f)); layerById.set(String(f.properties.id), layer); }
-      }).addTo(map);
-
+      geoLayer=L.geoJSON(data,{ pointToLayer:(f,latlng)=>L.circleMarker(latlng,pointStyle(f)), onEachFeature:(f,l)=>{ l.bindPopup(popupHtml(f)); layerById.set(String(f.properties.id),l); } }).addTo(map);
       if(!userTouchedView){
-        if(data.features.length){
-          const b=geoLayer.getBounds(); if(b.isValid()) map.fitBounds(b.pad(0.2));
-        }else map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
-      } else {
-        map.setView(savedView.center, savedView.zoom, {animate:false});
-      }
-
-      if(focusId && layerById.has(String(focusId))){
-        const lyr=layerById.get(String(focusId)); const ll=lyr.getLatLng();
-        map.setView(ll, Math.max(16, savedView.zoom||DEFAULT_ZOOM)); lyr.openPopup();
-      }
+        if(data.features.length){ const b=geoLayer.getBounds(); if(b.isValid()) map.fitBounds(b.pad(0.2)); }
+        else map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
+      } else map.setView(savedView.center, savedView.zoom, {animate:false});
+      if(focusId && layerById.has(String(focusId))){ const lyr=layerById.get(String(focusId)); map.setView(lyr.getLatLng(), Math.max(16,map.getZoom())); lyr.openPopup(); }
     }
+    async function refresh(){ try{ const r=await fetch('/geojson',{cache:'no-store'}); const data=await r.json(); features=data.features||[]; attachLayer(data); renderList(); }catch(e){ console.error('refresh failed',e); } }
 
-    async function refresh(){
-      try{
-        const r = await fetch('/geojson', {cache:'no-store'}); const data = await r.json();
-        features = data.features || [];
-        attachLayer(data);
-        renderList();
-      }catch(e){ console.error('refresh failed', e); }
-    }
-
-    // ---- Hotspots (NASA FIRMS) overlay
-    let hotspotsLayer = null;
+    // FIRMS overlay
+    let hotspotsLayer=null;
     async function loadHotspots(){
       try{
-        const r = await fetch('/hotspots', {cache:'no-store'});
-        const gj = await r.json();
+        const r=await fetch('/hotspots',{cache:'no-store'}); const gj=await r.json();
         if(hotspotsLayer){ hotspotsLayer.remove(); hotspotsLayer=null; }
         if(!gj.features || !gj.features.length) return;
-
-        hotspotsLayer = L.geoJSON(gj, {
-          pointToLayer: (f, latlng) => L.circleMarker(latlng, {
-            radius:5, color:'#ff6d00', weight:1, fillColor:'#ff6d00', fillOpacity:.8
-          }),
-          onEachFeature: (f, layer) => {
-            const p = f.properties || {};
-            const lat = f.geometry.coordinates[1], lon = f.geometry.coordinates[0];
-            const conf = p.confidence || p.conf || '';
-            const acq = p.acq_date ? `${p.acq_date} ${p.acq_time||''}` : (p.datetime||'');
-            const gmaps = `https://maps.google.com/?q=${fmt(lat)},${fmt(lon)}`;
-            layer.bindPopup(
-              `<b>NASA FIRMS</b><br/>${fmt(lat)}, ${fmt(lon)}<br/>${acq}${conf?` · conf: ${conf}`:''}<br/>` +
-              `<a class="btn" href="${gmaps}" target="_blank">Google Maps</a>`
-            );
-          }
-        });
-        hotspotsLayer.addTo(map);
-      }catch(e){ console.error('hotspots failed', e); }
+        hotspotsLayer = L.geoJSON(gj,{
+          pointToLayer:(f,latlng)=>L.circleMarker(latlng,{radius:5,color:'#ff6d00',weight:1,fillColor:'#ff6d00',fillOpacity:.85}),
+          onEachFeature:(f,l)=>{ const p=f.properties||{}; const lat=f.geometry.coordinates[1], lon=f.geometry.coordinates[0]; const t=p.acq_date?`${p.acq_date} ${p.acq_time||''}`:(p.datetime||''); l.bindPopup(`<b>NASA FIRMS</b><br/>${fmt(lat)}, ${fmt(lon)}<br/>${t}`); }
+        }).addTo(map);
+      }catch(e){ console.error('hotspots failed',e); }
     }
-    // переключатель
-    hotToggle.checked = localStorage.getItem('hotspotsEnabled') === '1';
-    if (hotToggle.checked) loadHotspots();
-    hotToggle.addEventListener('change', () => {
-      localStorage.setItem('hotspotsEnabled', hotToggle.checked ? '1' : '0');
-      if (hotToggle.checked) loadHotspots();
-      else if (hotspotsLayer) { hotspotsLayer.remove(); hotspotsLayer=null; }
-    });
-    // периодическое обновление хотспотов при включённом флаге
-    setInterval(() => { if (hotToggle.checked) loadHotspots(); }, 5*60*1000);
+    hotToggle.checked = (HOTSPOTS_DEFAULT===1) || (localStorage.getItem('hotspotsEnabled')==='1');
+    if(hotToggle.checked) loadHotspots();
+    hotToggle.onchange=()=>{ localStorage.setItem('hotspotsEnabled', hotToggle.checked?'1':'0'); if(hotToggle.checked) loadHotspots(); else if(hotspotsLayer){ hotspotsLayer.remove(); hotspotsLayer=null; } };
+    setInterval(()=>{ if(hotToggle.checked) loadHotspots(); }, 5*60*1000);
 
-    // ---- list rendering + interactions
     function renderList(){
-      const pool = getFiltered(activeTab);
-      const page = (activeTab==='vol') ? pageVol : pageFire;
-      const totalPages = Math.max(1, Math.ceil(pool.length / PAGE_SIZE));
-      const curPage = Math.min(page, totalPages);
+      const pool=getFiltered(activeTab);
+      const cur=(activeTab==='vol')?pageVol:pageFire;
+      const maxP=Math.max(1,Math.ceil(pool.length/PAGE_SIZE));
+      const curPage=Math.min(cur,maxP);
       if(activeTab==='vol') pageVol=curPage; else pageFire=curPage; persistPages();
 
-      const start = (curPage-1)*PAGE_SIZE;
-      const items = pool.slice(start, start+PAGE_SIZE);
-
-      listEl.innerHTML='';
-      if(!items.length){
-        listEl.innerHTML = `<div class="muted" style="padding:12px">No items.</div>`;
-      }else{
-        for(const f of items){
-          const p=f.properties, lat=f.geometry.coordinates[1], lon=f.geometry.coordinates[0];
-          const el=document.createElement('div');
-          el.className='item';
-          el.innerHTML = `
-            <div>
-              <div><b>${p.type==='fire'?'🔥 Fire':'📍 Volunteer'}</b>${p.contact?` · ${p.contact}`:''}</div>
-              <div class="meta">${fmtTS(p.ts)} · ${fmt(lat)}, ${fmt(lon)}</div>
-            </div>
-            <div class="actions">
-              <button class="btn btn-copy">Copy</button>
-              ${uid && p.user_id && String(p.user_id)===String(uid)?'<button class="btn btn-del">Delete</button>':''}
-            </div>`;
-          el.addEventListener('click', (e)=>{
-            if ((e.target).closest('.actions')) return;
-            const layer = layerById.get(String(p.id));
-            if(layer){ const ll=layer.getLatLng(); map.setView(ll, Math.max(16, map.getZoom())); layer.openPopup(); }
-          });
-          el.querySelector('.btn-copy').addEventListener('click', (e)=>{ e.stopPropagation(); copyText(`${fmt(lat)}, ${fmt(lon)}`); });
-          const delBtn = el.querySelector('.btn-del'); if(delBtn) delBtn.addEventListener('click', async (e)=>{ e.stopPropagation(); await delEvent(p.id); });
-          listEl.appendChild(el);
-        }
+      const items=pool.slice((curPage-1)*PAGE_SIZE, (curPage-1)*PAGE_SIZE+PAGE_SIZE);
+      listEl.innerHTML = items.length ? '' : `<div class="muted" style="padding:12px">No items.</div>`;
+      for(const f of items){
+        const p=f.properties, lat=f.geometry.coordinates[1], lon=f.geometry.coordinates[0];
+        const el=document.createElement('div'); el.className='item';
+        el.innerHTML=`<div><div><b>${p.type==='fire'?'🔥 Fire':'📍 Volunteer'}</b>${p.contact?` · ${p.contact}`:''}</div><div class="meta">${fmtTS(p.ts)} · ${fmt(lat)}, ${fmt(lon)}</div></div><div class="actions"><button class="btn btn-copy">Copy</button>${uid&&p.user_id&&String(p.user_id)===String(uid)?'<button class="btn btn-del">Delete</button>':''}</div>`;
+        el.addEventListener('click',(e)=>{ if((e.target).closest('.actions')) return; const lyr=layerById.get(String(p.id)); if(lyr){ const ll=lyr.getLatLng(); map.setView(ll, Math.max(16,map.getZoom())); lyr.openPopup(); } });
+        el.querySelector('.btn-copy').onclick=(e)=>{ e.stopPropagation(); copyText(`${fmt(lat)}, ${fmt(lon)}`); };
+        const del=el.querySelector('.btn-del'); if(del) del.onclick=(e)=>{ e.stopPropagation(); delEvent(p.id); };
+        listEl.appendChild(el);
       }
-      pageInfo.textContent = `${curPage} / ${totalPages}`;
-      prevBtn.disabled = (curPage<=1);
-      nextBtn.disabled = (curPage>=totalPages);
+      pageInfo.textContent=`${curPage} / ${maxP}`;
+      prevBtn.disabled=(curPage<=1); nextBtn.disabled=(curPage>=maxP);
     }
 
-    // init
     setActiveTab(activeTab);
     refresh();
     setInterval(refresh, AUTO_REFRESH_MS);
