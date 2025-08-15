@@ -2,250 +2,360 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Live Map</title>
+  <title>Live Wildfire Map</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
   <style>
-    html, body { height:100%; margin:0; }
-    #map { position:absolute; inset:0; }
-    .legend {
-      position:absolute; right:12px; top:12px; z-index:600;
-      background:#fff; padding:10px 12px; border-radius:12px;
-      box-shadow:0 2px 12px rgba(0,0,0,.15);
-      font:14px/1.25 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    html, body { height: 100%; margin: 0; }
+    #map { height: 100%; margin: 0; }
+    .legend, .sidebar {
+      position: absolute; right: 10px; background: #fff; padding: 10px 12px;
+      border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.1); font: 14px/1.2 system-ui, Arial;
     }
-    .legend b{ display:block; margin-bottom:6px }
-    .pill{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle }
-    .red{ background:#e53935 } .blue{ background:#1e88e5 } .green{ background:#43a047 } .orange{ background:#ff6d00 }
-    .toggle-fab{ position:absolute; right:12px; top:72px; z-index:650; border:1px solid #e1e5ea; border-radius:22px; padding:8px 12px; background:#fff; cursor:pointer; box-shadow:0 2px 10px rgba(0,0,0,.15); }
-    .sidebar{ position:absolute; right:12px; top:112px; bottom:12px; z-index:640; width:320px; max-width:calc(100vw - 24px); background:#fff; border-radius:14px; box-shadow:0 2px 12px rgba(0,0,0,.15); display:flex; flex-direction:column; overflow:hidden; transition:transform .25s ease, opacity .25s ease; }
-    .sidebar.collapsed{ transform:translateX(110%); opacity:0; pointer-events:none }
-    .tabs{ display:flex; gap:8px; padding:10px 12px 0 }
-    .tab{ flex:1; text-align:center; padding:10px 12px; border-radius:10px; cursor:pointer; background:#f1f3f5; user-select:none }
-    .tab.active{ background:#e8f0fe; color:#1a73e8; font-weight:600 }
-    .filters{ display:flex; align-items:center; gap:8px; padding:8px 12px }
-    .filters input[type="text"]{ flex:1; padding:8px 10px; border:1px solid #e1e5ea; border-radius:8px; font:14px/1.2 inherit }
-    .filters label{ font-size:13px; color:#555; white-space:nowrap }
-    .list{ flex:1; overflow:auto; padding:0 12px }
-    .item{ display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px; border:1px solid #eef1f4; border-radius:10px; margin:8px 0; background:#fff; cursor:pointer }
-    .item:hover{ background:#fafbfd }
-    .item .meta{ color:#6b7280; font-size:12px; margin-top:2px }
-    .item .actions{ display:flex; gap:6px }
-    .btn{ display:inline-block; padding:6px 10px; border:1px solid #e1e5ea; border-radius:8px; background:#fff; text-decoration:none; font-size:13px; cursor:pointer }
-    .btn:active{ background:#f3f4f6 }
-    .pager{ display:flex; align-items:center; justify-content:space-between; padding:8px 12px 12px }
-    .muted{ color:#6b7280 }
-    .legend .row{ display:flex; align-items:center; gap:8px; margin-top:6px }
-    .legend input[type="checkbox"]{ transform: translateY(1px) }
-    @media (max-width:820px){ .sidebar{ width:min(92vw, 360px); top:112px } }
+    .legend { top: 10px; }
+    .sidebar { top: 92px; bottom: 10px; width: 270px; display: flex; flex-direction: column; }
+    .legend b{ display:block; margin-bottom:6px;}
+    .pill { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
+    .red{ background:#e53935; } .blue{ background:#1e88e5; }
+    .btn { display:inline-block; padding:6px 10px; border:1px solid #ddd; border-radius:6px; cursor:pointer; text-decoration:none; background:#fff; }
+    .btn:disabled{ opacity:.5; cursor:not-allowed; }
+    .btn:active{ background:#eee; }
+    .photo { max-width: 260px; display:block; margin-top:6px; border-radius:6px }
+
+    .tabs { display:flex; gap:6px; margin-bottom:8px; }
+    .tab { flex:1; text-align:center; border:1px solid #ddd; border-radius:8px; padding:6px; cursor:pointer; user-select:none; }
+    .tab.active { background:#f5f5f5; font-weight:600; }
+    .list { overflow:auto; border:1px solid #eee; border-radius:8px; flex:1; }
+    .item { padding:8px 10px; border-bottom:1px solid #f1f1f1; cursor:pointer; }
+    .item:hover { background:#fafafa; }
+    .meta { opacity:.75; font-size:12px; }
+    .pager { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:8px; }
+    .pageinfo { font-variant-numeric: tabular-nums; opacity:.8; }
+    @media (max-width: 900px) {
+      .sidebar { width: 210px; }
+      .photo { max-width: 200px; }
+    }
   </style>
 </head>
 <body>
-  <div id="map"></div>
+<div id="map"></div>
 
-  <div class="legend">
-    <b>Legend</b>
-    <div><span class="pill red"></span>Fire (red)</div>
-    <div><span class="pill blue"></span>Volunteer (blue)</div>
-    <div><span class="pill green"></span>Volunteer (live)</div>
-    <div class="row"><span class="pill orange"></span>NASA FIRMS
-      <label style="margin-left:8px"><input id="hotToggle" type="checkbox" /> show</label>
-    </div>
+<div class="legend">
+  <b>Legend</b>
+  <div><span class="pill red"></span>Fire (red)</div>
+  <div><span class="pill blue"></span>Volunteer (blue)</div>
+</div>
+
+<div class="sidebar">
+  <div class="tabs">
+    <div id="tabVol" class="tab active">Volunteers</div>
+    <div id="tabFire" class="tab">Fires</div>
   </div>
+  <div id="listVol" class="list"></div>
+  <div id="listFire" class="list" style="display:none"></div>
 
-  <button id="toggleFab" class="toggle-fab">☰ Lists</button>
-
-  <div id="sidebar" class="sidebar">
-    <div class="tabs">
-      <div id="tabVol" class="tab active">Volunteers</div>
-      <div id="tabFire" class="tab">Fires</div>
-    </div>
-    <div class="filters">
-      <input id="search" type="text" placeholder="Search..." />
-      <label><input id="onlyMine" type="checkbox" /> Only my points</label>
-    </div>
-    <div id="list" class="list"></div>
-    <div class="pager">
-      <button id="prevBtn" class="btn">Prev</button>
-      <div id="pageInfo" class="muted">1 / 1</div>
-      <button id="nextBtn" class="btn">Next</button>
-    </div>
+  <div class="pager">
+    <button id="prevBtn" class="btn">Prev</button>
+    <span id="pageInfo" class="pageinfo">1 / 1</span>
+    <button id="nextBtn" class="btn">Next</button>
   </div>
+</div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script>
-    const DEFAULT_CENTER = [__LAT__, __LON__];
-    const DEFAULT_ZOOM   = __ZOOM__;
-    const MAP_TILER_KEY  = "__MAP_KEY__";
-    const AUTO_REFRESH_MS = 30000;
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script>
+const MAP_KEY = "__MAP_KEY__"; // из ENV (подставляет бэкенд)
+const DEFAULT_CENTER = [__LAT__, __LON__];
+const DEFAULT_ZOOM   = __ZOOM__;
+const AUTO_REFRESH_MS = 30000;
+const PAGE_SIZE = 15; // количество элементов на страницу
 
-    const urlParams = new URLSearchParams(location.search);
-    const uid = urlParams.get("uid");
-    const sig = urlParams.get("sig");
-    const focusId = urlParams.get("focus");
-    const NO_BASE = urlParams.get("nobase")==='1';
+const urlParams = new URLSearchParams(location.search);
+const focusId = urlParams.get("focus");
+const uid = urlParams.get("uid");
+const sig = urlParams.get("sig");
 
-    const map = L.map('map', { zoomControl:true }).setView(DEFAULT_CENTER, DEFAULT_ZOOM);
-    if(!NO_BASE){
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19, attribution:'&copy; OpenStreetMap contributors' }).addTo(map);
-      const key=(MAP_TILER_KEY||'').trim();
-      if(key && key!=='__MAP_KEY__' && key.toLowerCase()!=='disable'){
-        const mt=L.tileLayer(`https://api.maptiler.com/maps/streets/{z}/{x}/{y}.png?key=${key}`,{maxZoom:20}); mt.on('tileerror',()=>{}); mt.addTo(map);
+const map = L.map('map', { zoomControl: true });
+
+// Выбор тайлов: MapTiler при наличии ключа, иначе стандартный OSM
+if (MAP_KEY && MAP_KEY !== "__MAP_KEY__") {
+  L.tileLayer(
+    `https://api.maptiler.com/maps/streets-v2/256/{z}/{x}/{y}.png?key=${MAP_KEY}`,
+    { maxZoom: 20, attribution: '&copy; OSM & MapTiler' }
+  ).addTo(map);
+} else {
+  L.tileLayer(
+    'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    { maxZoom: 19, attribution: '&copy; OpenStreetMap' }
+  ).addTo(map);
+}
+
+let geoLayer = null;
+let layerById = {}; // id -> layer
+
+// --- Сохранение пользовательского положения и масштабирования ---
+let userInteracted = false;
+let firstRender = true;
+
+map.on('dragstart', () => userInteracted = true);
+map.on('zoomstart', () => userInteracted = true);
+
+function fmtTS(ts){
+  if(!ts) return '';
+  const d = new Date(ts*1000);
+  return d.toLocaleString();
+}
+function fmt(v){ return (Math.round(v*1e6)/1e6).toFixed(6); }
+
+async function copyText(t){
+  try { await navigator.clipboard.writeText(t); alert("Coordinates copied"); }
+  catch(e){
+    const ta = document.createElement('textarea');
+    ta.value = t; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    try{ document.execCommand('copy'); alert("Coordinates copied"); }
+    catch(_){ alert("Copy manually:\n"+t); }
+    document.body.removeChild(ta);
+  }
+}
+
+function contactHtml(c){
+  if(!c) return '';
+  if(c.startsWith('@')){
+    const u = c.slice(1);
+    return ` · <a href="https://t.me/${u}" target="_blank">@${u}</a>`;
+  }
+  if(c.startsWith('+')) return ` · <a href="tel:${c}">${c}</a>`;
+  return ` · ${c}`;
+}
+
+function popupHtml(feature){
+  const pr = feature.properties || {};
+  const lat = feature.geometry.coordinates[1];
+  const lon = feature.geometry.coordinates[0];
+  const title = (pr.type === 'fire') ? '🔥 Fire' : '📍 Volunteer';
+  const coordsText = `${fmt(lat)},${fmt(lon)}`;
+  const gmaps = `https://maps.google.com/?q=${fmt(lat)},${fmt(lon)}`;
+
+  let html = `
+    <div style="min-width:240px">
+      <div style="font-weight:600">${title}${contactHtml(pr.contact)}</div>
+      <div class="meta">${fmtTS(pr.ts)}</div>
+      ${pr.text ? `<div style="margin-top:4px">${pr.text}</div>` : ``}
+  `;
+
+  if (pr.type === 'fire' && pr.photo_file_id) {
+    const photoUrl = `/photo/${encodeURIComponent(pr.photo_file_id)}`;
+    html += `<img class="photo" src="${photoUrl}" alt="fire photo" />`;
+  }
+
+  html += `
+      <div style="margin-top:6px">
+        <a class="btn" href="${gmaps}" target="_blank">Google Maps</a>
+        <a class="btn" href="#" onclick="copyText('${coordsText}');return false;">Copy</a>
+      </div>
+  `;
+
+  if(uid && sig && pr.user_id && String(pr.user_id) === uid){
+    html += `
+      <div style="margin-top:8px">
+        <a class="btn" href="#" onclick="delEvent(${pr.id});return false;">Delete</a>
+      </div>
+    `;
+  }
+  html += `</div>`;
+  return html;
+}
+
+async function delEvent(id){
+  if(!confirm('Delete this point?')) return;
+  try{
+    const r = await fetch(`/event/${id}?uid=${uid}&sig=${sig}`, {method:'DELETE'});
+    if(r.ok){ refresh(); }
+    else { alert('Delete failed'); }
+  }catch(e){ console.error(e); alert('Network error'); }
+}
+
+// ---------- Списки справа + пагинация ----------
+const $tabVol  = document.getElementById('tabVol');
+const $tabFire = document.getElementById('tabFire');
+const $listVol = document.getElementById('listVol');
+const $listFire= document.getElementById('listFire');
+
+const $prev = document.getElementById('prevBtn');
+const $next = document.getElementById('nextBtn');
+const $pageInfo = document.getElementById('pageInfo');
+
+let activeTab = 'vol'; // 'vol' | 'fire'
+let volData = []; // массив features
+let fireData = [];
+let volPage = 1;
+let firePage = 1;
+
+$tabVol.onclick = () => { activeTab='vol'; $tabVol.classList.add('active'); $tabFire.classList.remove('active'); $listVol.style.display='block'; $listFire.style.display='none'; renderPagination(); renderVisiblePage(); };
+$tabFire.onclick= () => { activeTab='fire'; $tabFire.classList.add('active'); $tabVol.classList.remove('active'); $listFire.style.display='block'; $listVol.style.display='none'; renderPagination(); renderVisiblePage(); };
+
+$prev.onclick = () => {
+  if (activeTab==='vol' && volPage>1) { volPage--; renderVisiblePage(); renderPagination(); }
+  else if (activeTab==='fire' && firePage>1) { firePage--; renderVisiblePage(); renderPagination(); }
+};
+$next.onclick = () => {
+  const totalVolPages  = Math.max(1, Math.ceil(volData.length / PAGE_SIZE));
+  const totalFirePages = Math.max(1, Math.ceil(fireData.length / PAGE_SIZE));
+  if (activeTab==='vol'  && volPage < totalVolPages) { volPage++; renderVisiblePage(); renderPagination(); }
+  if (activeTab==='fire' && firePage < totalFirePages){ firePage++; renderVisiblePage(); renderPagination(); }
+};
+
+function h(tag, props={}, children=[]){
+  const el = document.createElement(tag);
+  Object.entries(props||{}).forEach(([k,v]) => { if(k==='class') el.className=v; else if(k==='html') el.innerHTML=v; else el.setAttribute(k,v); });
+  (children||[]).forEach(ch => { if(typeof ch==='string') el.appendChild(document.createTextNode(ch)); else el.appendChild(ch); });
+  return el;
+}
+
+function tsStr(ts){ if(!ts) return ''; const d = new Date(ts*1000); return d.toLocaleString(); }
+
+function focusFeature(id){
+  if(!geoLayer) return;
+  let targetLayer = layerById[id];
+  if(!targetLayer){
+    geoLayer.eachLayer(ly=>{
+      const pr = ly.feature?.properties;
+      if(pr && String(pr.id)===String(id)) targetLayer = ly;
+    });
+  }
+  if(targetLayer){
+    const latlng = targetLayer.getLatLng ? targetLayer.getLatLng() :
+                   L.latLng(targetLayer.feature.geometry.coordinates[1], targetLayer.feature.geometry.coordinates[0]);
+    userInteracted = true; // считаем это «навигацией» пользователя
+    map.setView(latlng, Math.max(map.getZoom(), 15));
+    targetLayer.openPopup && targetLayer.openPopup();
+  }
+}
+
+function buildDataArrays(features){
+  volData.length = 0;
+  fireData.length = 0;
+  for(const f of features){
+    const pr = f.properties || {};
+    if(pr.type === 'fire') fireData.push(f); else volData.push(f);
+  }
+  // новые сверху
+  volData.sort((a,b)=> (b.properties.ts||0)-(a.properties.ts||0));
+  fireData.sort((a,b)=> (b.properties.ts||0)-(a.properties.ts||0));
+  // если мы на странице за пределами — откатим на последнюю
+  const volPages = Math.max(1, Math.ceil(volData.length / PAGE_SIZE));
+  const firePages= Math.max(1, Math.ceil(fireData.length / PAGE_SIZE));
+  if (volPage > volPages) volPage = volPages;
+  if (firePage > firePages) firePage = firePages;
+}
+
+function renderVisiblePage(){
+  // очистка
+  $listVol.innerHTML = '';
+  $listFire.innerHTML = '';
+
+  // Volunteers
+  const vpStart = (volPage-1)*PAGE_SIZE;
+  const vpEnd   = vpStart + PAGE_SIZE;
+  const sliceVol = volData.slice(vpStart, vpEnd);
+  for(const f of sliceVol){
+    const pr = f.properties || {};
+    const [lon,lat] = f.geometry.coordinates;
+    const el = h('div', {class:'item'});
+    el.innerHTML = `<div>📍 ${pr.contact||''}</div><div class="meta">${tsStr(pr.ts)} · ${fmt(lat)}, ${fmt(lon)}</div>`;
+    el.onclick = ()=> focusFeature(pr.id);
+    $listVol.appendChild(el);
+  }
+
+  // Fires
+  const fpStart = (firePage-1)*PAGE_SIZE;
+  const fpEnd   = fpStart + PAGE_SIZE;
+  const sliceFire = fireData.slice(fpStart, fpEnd);
+  for(const f of sliceFire){
+    const pr = f.properties || {};
+    const [lon,lat] = f.geometry.coordinates;
+    const el = h('div', {class:'item'});
+    el.innerHTML = `<div>🔥 ${pr.contact||''}</div><div class="meta">${tsStr(pr.ts)} · ${fmt(lat)}, ${fmt(lon)}</div>`;
+    el.onclick = ()=> focusFeature(pr.id);
+    $listFire.appendChild(el);
+  }
+
+  // отобразим активную вкладку
+  if (activeTab==='vol') { $listVol.style.display='block'; $listFire.style.display='none'; }
+  else { $listVol.style.display='none'; $listFire.style.display='block'; }
+}
+
+function renderPagination(){
+  const totalVolPages  = Math.max(1, Math.ceil(volData.length / PAGE_SIZE));
+  const totalFirePages = Math.max(1, Math.ceil(fireData.length / PAGE_SIZE));
+  const page = (activeTab==='vol') ? volPage : firePage;
+  const total= (activeTab==='vol') ? totalVolPages : totalFirePages;
+
+  $pageInfo.textContent = `${page} / ${total}`;
+  $prev.disabled = (page<=1);
+  $next.disabled = (page>=total);
+}
+
+async function refresh(){
+  try{
+    const r = await fetch('/geojson', {cache:'no-store'});
+    const data = await r.json();
+
+    // Сохраняем текущий вид, если пользователь уже двигал карту
+    const currentCenter = map.getCenter();
+    const currentZoom = map.getZoom();
+
+    if(geoLayer){ geoLayer.remove(); }
+    layerById = {};
+
+    geoLayer = L.geoJSON(data, {
+      pointToLayer: (f, latlng) => {
+        const typ = f.properties?.type;
+        const color = (typ==='fire') ? '#e53935' : '#1e88e5';
+        return L.circleMarker(latlng, { radius:8, color, weight:2, fillColor:color, fillOpacity:.6 });
+      },
+      onEachFeature: (f, layer) => {
+        const id = f.properties?.id;
+        if(id!=null) layerById[id] = layer;
+        layer.bindPopup(popupHtml(f));
       }
-    }
+    }).addTo(map);
 
-    let userTouched=false, savedView={center:map.getCenter(), zoom:map.getZoom()};
-    map.on('moveend zoomend', ()=>{ userTouched=true; savedView={center:map.getCenter(), zoom:map.getZoom()} });
+    // наполняем данные для списков и отрисуем текущие страницы
+    buildDataArrays(data.features||[]);
+    renderVisiblePage();
+    renderPagination();
 
-    const sidebar=document.getElementById('sidebar'); const toggleFab=document.getElementById('toggleFab');
-    function setCollapsed(v){ if(v) sidebar.classList.add('collapsed'); else sidebar.classList.remove('collapsed'); localStorage.setItem('sidebarCollapsed', v?'1':'0'); setTimeout(()=>map.invalidateSize(),200); }
-    const initCollapsed = localStorage.getItem('sidebarCollapsed')==='1' || window.matchMedia('(max-width:820px)').matches;
-    setCollapsed(initCollapsed);
-    toggleFab.onclick=()=>setCollapsed(!sidebar.classList.contains('collapsed'));
-
-    const tabVol=document.getElementById('tabVol'), tabFire=document.getElementById('tabFire');
-    const listEl=document.getElementById('list'), searchEl=document.getElementById('search');
-    const onlyMineEl=document.getElementById('onlyMine'), prevBtn=document.getElementById('prevBtn');
-    const nextBtn=document.getElementById('nextBtn'), pageInfo=document.getElementById('pageInfo');
-    const hotToggle=document.getElementById('hotToggle');
-
-    let activeTab=localStorage.getItem('activeTab')||'vol', pageVol=+(localStorage.getItem('pageVol')||1), pageFire=+(localStorage.getItem('pageFire')||1);
-    const PAGE_SIZE=15;
-
-    function setActiveTab(t){ activeTab=t; tabVol.classList.toggle('active', t==='vol'); tabFire.classList.toggle('active', t==='fire'); localStorage.setItem('activeTab',t); renderList(); }
-    tabVol.onclick=()=>setActiveTab('vol'); tabFire.onclick=()=>setActiveTab('fire');
-    searchEl.oninput=renderList; onlyMineEl.onchange=renderList;
-    function persist(){ localStorage.setItem('pageVol', String(pageVol)); localStorage.setItem('pageFire', String(pageFire)); }
-    prevBtn.onclick=()=>{ if(activeTab==='vol') pageVol=Math.max(1,pageVol-1); else pageFire=Math.max(1,pageFire-1); persist(); renderList(); };
-    nextBtn.onclick=()=>{ const total=getFiltered(activeTab).length, max=Math.max(1, Math.ceil(total/PAGE_SIZE)); if(activeTab==='vol') pageVol=Math.min(max,pageVol+1); else pageFire=Math.min(max,pageFire+1); persist(); renderList(); };
-
-    function fmt(v){ return (Math.round(v*1e6)/1e6).toFixed(6) }
-    function ts(t){ try{ return new Date(t*1000).toLocaleString() }catch(_){ return '' } }
-    async function copyText(s){ try{ await navigator.clipboard.writeText(s); alert('Copied'); }catch(_){ const ta=document.createElement('textarea'); ta.value=s; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta); alert('Copied'); } }
-    async function delEvent(id){ if(!confirm('Delete this point?')) return; const r=await fetch(`/event/${id}?uid=${uid||''}&sig=${sig||''}`,{method:'DELETE'}); if(r.ok) await refresh(); else alert('Failed to delete'); }
-    async function delLive(userId){ if(!confirm('Stop live tracking?')) return; const r=await fetch(`/live/${userId}?uid=${uid||''}&sig=${sig||''}`,{method:'DELETE'}); if(r.ok) await refresh(); else alert('Failed to stop live'); }
-    window.copyText=copyText; window.delEvent=delEvent; window.delLive=delLive;
-
-    let features=[], geoLayer=null, layerById=new Map(), hotspotsLayer=null;
-
-    function stylePoint(f){
-      const t=f.properties.type;
-      const color = t==='fire' ? '#e53935' : (t==='volunteer_live' ? '#43a047' : '#1e88e5');
-      return { radius:8, color, weight:2, fillColor:color, fillOpacity:.6 };
-    }
-
-    function popupHtml(f){
-      const p=f.properties, lat=f.geometry.coordinates[1], lon=f.geometry.coordinates[0];
-      const title = p.type==='fire' ? '🔥 Fire' : (p.type==='volunteer_live' ? '🟢 Volunteer (live)' : '📍 Volunteer');
-      const gmaps=`https://maps.google.com/?q=${fmt(lat)},${fmt(lon)}`;
-      let html=`<div style="min-width:240px"><div style="font-weight:600">${title}${p.contact?` · ${p.contact}`:''}</div><div style="opacity:.8">${ts(p.ts)}</div>`;
-      if(p.text) html += `<div style="margin-top:4px">${p.text}</div>`;
-      if(p.type==='fire' && p.photo_file_id) html += `<div style="margin-top:6px"><img src="/photo/${p.photo_file_id}" style="max-width:260px;border-radius:8px"/></div>`;
-      if(p.type==='volunteer_live' && p.live_until){ html += `<div class="muted" style="margin-top:4px">Live until: ${ts(p.live_until)}</div>`; }
-      html += `<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"><a class="btn" href="${gmaps}" target="_blank">Google Maps</a><a class="btn" href="#" onclick="copyText('${fmt(lat)}, ${fmt(lon)}');return false;">Copy Coordinates</a></div>`;
-      if(uid && sig && p.user_id && String(p.user_id)===String(uid)){
-        if(p.type==='volunteer_live') html += `<div style="margin-top:8px"><a class="btn" href="#" onclick="delLive(${p.user_id});return false;">Stop Live</a></div>`;
-        else html += `<div style="margin-top:8px"><a class="btn" href="#" onclick="delEvent(${p.id});return false;">Delete</a></div>`;
+    // Управление видом: только при первом рендере, если пользователь ещё не двигал
+    if (data.features.length){
+      if (firstRender && !userInteracted) {
+        const b = geoLayer.getBounds();
+        if(b.isValid()) map.fitBounds(b.pad(0.2));
       }
-      return html + `</div>`;
-    }
-
-    function attach(data){
-      if(geoLayer){ geoLayer.remove(); layerById.clear(); }
-      geoLayer=L.geoJSON(data,{
-        pointToLayer:(f,latlng)=>L.circleMarker(latlng, stylePoint(f)),
-        onEachFeature:(f,l)=>{ l.bindPopup(popupHtml(f)); layerById.set(String(f.properties.id), l); }
-      }).addTo(map);
-
-      if(!userTouched){
-        if(data.features.length){ const b=geoLayer.getBounds(); if(b.isValid()) map.fitBounds(b.pad(0.2)); }
-        else map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
-      }else{
-        map.setView(savedView.center, savedView.zoom, {animate:false});
-      }
-
-      if(focusId && layerById.has(String(focusId))){
-        const lyr=layerById.get(String(focusId)); const ll=lyr.getLatLng();
-        map.setView(ll, Math.max(16, savedView.zoom||DEFAULT_ZOOM)); lyr.openPopup();
-      }
-    }
-
-    function byType(t){ return features.filter(f=>f.properties.type===t) }
-    function volunteersCombined(){
-      return features.filter(f=>f.properties.type==='volunteer' || f.properties.type==='volunteer_live');
-    }
-    function getFiltered(tab){
-      const q=(searchEl.value||'').toLowerCase(); const mine=onlyMineEl.checked && uid;
-      const arr = (tab==='vol') ? volunteersCombined() : byType('fire');
-      return arr.filter(f=>{
-        const p=f.properties;
-        let ok=true;
-        if(mine) ok = ok && (String(p.user_id)===String(uid));
-        if(q){
-          const hay=[p.contact||'',p.text||'',String(p.user_id||''),String(p.id||''),String(f.geometry.coordinates[1]),String(f.geometry.coordinates[0])].join(' ').toLowerCase();
-          ok = ok && hay.includes(q);
+      if (focusId){
+        const feat = data.features.find(x => String(x.properties.id) === String(focusId));
+        if (feat){
+          const latlng = L.latLng(feat.geometry.coordinates[1], feat.geometry.coordinates[0]);
+          map.setView(latlng, 16);
         }
-        return ok;
-      });
-    }
-
-    function renderList(){
-      const PAGE_SIZE=15;
-      const pool=getFiltered(activeTab);
-      let page=(activeTab==='vol')?+(localStorage.getItem('pageVol')||1):+(localStorage.getItem('pageFire')||1);
-      const totalPages=Math.max(1, Math.ceil(pool.length/PAGE_SIZE));
-      page = Math.min(page, totalPages);
-      if(activeTab==='vol') localStorage.setItem('pageVol', String(page)); else localStorage.setItem('pageFire', String(page));
-      const start=(page-1)*PAGE_SIZE, items=pool.slice(start, start+PAGE_SIZE);
-
-      listEl.innerHTML = items.length? '' : '<div class="muted" style="padding:12px">No items.</div>';
-      for(const f of items){
-        const p=f.properties, lat=f.geometry.coordinates[1], lon=f.geometry.coordinates[0];
-        const kind = p.type==='volunteer' ? '📍 Volunteer' : (p.type==='volunteer_live' ? '🟢 Volunteer (live)' : '🔥 Fire');
-        const el=document.createElement('div'); el.className='item';
-        el.innerHTML=`<div><div><b>${kind}</b>${p.contact?` · ${p.contact}`:''}</div><div class="meta">${ts(p.ts)} · ${fmt(lat)}, ${fmt(lon)}${p.live_until?` · until ${ts(p.live_until)}`:''}</div></div><div class="actions"><button class="btn btn-copy">Copy</button>${
-          uid && p.user_id && String(p.user_id)===String(uid)
-            ? (p.type==='volunteer_live' ? '<button class="btn btn-del">Stop</button>' : '<button class="btn btn-del">Delete</button>')
-            : ''
-        }</div>`;
-        el.addEventListener('click', (e)=>{ if((e.target).closest('.actions')) return; const lyr=layerById.get(String(p.id)); if(lyr){ const ll=lyr.getLatLng(); map.setView(ll, Math.max(16, map.getZoom())); lyr.openPopup(); }});
-        el.querySelector('.btn-copy').onclick=(e)=>{ e.stopPropagation(); copyText(`${fmt(lat)}, ${fmt(lon)}`); };
-        const delBtn=el.querySelector('.btn-del');
-        if(delBtn) delBtn.onclick=(e)=>{ e.stopPropagation(); (p.type==='volunteer_live') ? delLive(p.user_id) : delEvent(p.id); };
-        listEl.appendChild(el);
       }
-      pageInfo.textContent = `${page} / ${totalPages}`;
-      prevBtn.disabled = (page<=1); nextBtn.disabled = (page>=totalPages);
+    } else {
+      if (firstRender) map.setView(DEFAULT_CENTER, DEFAULT_ZOOM);
     }
 
-    async function loadHotspots(){
-      try{
-        const r=await fetch('/hotspots', {cache:'no-store'}); const gj=await r.json();
-        if(hotspotsLayer){ hotspotsLayer.remove(); hotspotsLayer=null; }
-        if(gj.features && gj.features.length){
-          hotspotsLayer=L.geoJSON(gj, {
-            pointToLayer:(f,latlng)=>L.circleMarker(latlng, {radius:5,color:'#ff6d00',weight:1,fillColor:'#ff6d00',fillOpacity:.8})
-          }).addTo(map);
-        }
-      }catch(e){ console.error('hotspots failed', e); }
-    }
-    hotToggle.checked = localStorage.getItem('hotspotsEnabled')==='1';
-    if(hotToggle.checked) loadHotspots();
-    hotToggle.onchange = ()=>{ localStorage.setItem('hotspotsEnabled', hotToggle.checked?'1':'0'); if(hotToggle.checked) loadHotspots(); else if(hotspotsLayer){ hotspotsLayer.remove(); hotspotsLayer=null; } };
-    setInterval(()=>{ if(hotToggle.checked) loadHotspots(); }, 5*60*1000);
-
-    async function refresh(){
-      try{
-        const r=await fetch('/geojson', {cache:'no-store'});
-        const data=await r.json();
-        features=data.features||[]; attach(data); renderList();
-      }catch(e){ console.error('refresh failed', e); }
+    // Если пользователь уже двигал — возвращаем прежний вид
+    if (!firstRender && userInteracted) {
+      map.setView(currentCenter, currentZoom, {animate:false});
     }
 
-    let activeTab = localStorage.getItem('activeTab') || 'vol';
-    setActiveTab(activeTab);
-    refresh();
-    setInterval(refresh, AUTO_REFRESH_MS);
-  </script>
+    firstRender = false;
+  }catch(e){
+    console.error("refresh failed", e);
+  }
+}
+
+refresh();
+setInterval(refresh, AUTO_REFRESH_MS);
+</script>
 </body>
 </html>
