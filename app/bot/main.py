@@ -18,7 +18,7 @@ from aiogram.types import (
     InlineKeyboardButton, InlineKeyboardMarkup, ContentType
 )
 
-from .storage import init_db, add_event, delete_event, get_geojson
+from .storage import init_db, save_event, delete_event, get_geojson
 
 # --------- конфигурация ----------
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -127,7 +127,7 @@ async def got_location(msg: Message):
     contact = f"@{msg.from_user.username}" if msg.from_user.username else (msg.from_user.full_name or str(uid))
     lat = msg.location.latitude
     lon = msg.location.longitude
-    eid = add_event(
+    eid = save_event(
         etype="volunteer",
         lat=lat, lon=lon,
         user_id=uid, contact=contact,
@@ -158,7 +158,7 @@ async def fire_coords_text(msg: Message):
     lat = float(lat_s)
     lon = float(lon_s)
     # создаём огонь сразу (без фото/описания), потом можно ещё раз прислать текст/фото — будет второй id
-    eid = add_event(
+    eid = save_event(
         etype="fire",
         lat=lat, lon=lon,
         user_id=uid, contact=contact,
@@ -185,7 +185,7 @@ async def fire_with_photo(msg: Message):
         await msg.answer("Please add coordinates in photo caption as <code>lat,lon</code>.")
         return
     file_id = msg.photo[-1].file_id
-    eid = add_event(
+    eid = save_event(
         etype="fire",
         lat=lat, lon=lon,
         user_id=uid, contact=contact,
