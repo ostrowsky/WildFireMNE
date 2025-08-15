@@ -2,96 +2,91 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Pick a point</title>
+  <title>Pick coordinates</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
-    html, body, #map { height: 100%; margin: 0; }
+    html, body { height:100%; margin:0; }
+    #map { position:absolute; inset:0; }
     .panel {
-      position: absolute; left: 10px; bottom: 10px; right: 10px; background:#fff; padding:10px 12px;
-      border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,.1); font: 14px/1.2 system-ui, Arial;
+      position:absolute; left:12px; top:12px; z-index:600;
+      background:#fff; padding:10px 12px; border-radius:12px;
+      box-shadow:0 2px 12px rgba(0,0,0,.15);
+      font:14px/1.25 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+      max-width:min(92vw,420px);
     }
-    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-    .btn { display:inline-block; padding:6px 10px; border:1px solid #ddd; border-radius:6px; cursor:pointer; text-decoration:none; }
-    .btn:active{ background:#eee; }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .btn { padding:6px 10px; border:1px solid #e1e5ea; border-radius:8px; background:#fff; cursor:pointer; }
+    .muted { color:#6b7280 }
+    .val { font-weight:600 }
   </style>
 </head>
 <body>
-<div id="map"></div>
-<div class="panel">
-  <div>Coordinates: <b id="coords"></b></div>
-  <div class="row" style="margin-top:8px">
-    <a class="btn" id="copyVol">Copy as Volunteer</a>
-    <a class="btn" id="copyFire">Copy as Fire</a>
+  <div id="map"></div>
+  <div class="panel">
+    <div><b>Choose point</b></div>
+    <div class="muted" style="margin:6px 0 8px">Drag the pin or tap the map. Copy coords and paste back to Telegram chat.</div>
+    <div class="row" style="margin-bottom:8px">
+      <div>Lat: <span id="lat" class="val"></span></div>
+      <div>Lon: <span id="lon" class="val"></span></div>
+    </div>
+    <div class="row">
+      <button id="copyBtn" class="btn">Copy</button>
+      <a id="gmaps" class="btn" target="_blank" rel="noopener">Google Maps</a>
+      <a id="openmap" class="btn" target="_blank" rel="noopener">Open live map</a>
+    </div>
   </div>
-  <div style="opacity:.7; margin-top:6px">Paste the copied text into the bot chat.</div>
-</div>
 
-<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-<script>
-/* ====== MAP API KEY hardcoded here ====== */
-const MAP_KEY = "172f6ffa32d48a50ce4f15f8e3a550d4";
-/* ======================================== */
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // placeholders from server
+    const INIT = [parseFloat("__INIT_LAT__"), parseFloat("__INIT_LON__")];
+    const CENTER = [parseFloat("__CENTER_LAT__"), parseFloat("__CENTER_LON__")];
+    const ZOOM = parseInt("__CENTER_ZOOM__", 10) || 12;
+    const MAP_TILER_KEY = "__MAP_TILER_KEY__";
+    const OPENMAP_URL = "__OPENMAP_URL__";
 
-const MODE = "__MODE__";  // "vol" or "fire"
-const CONTACT = "__CONTACT__";
-const startLat = __LAT__;
-const startLon = __LON__;
-const startZoom = __ZOOM__;
+    const map = L.map('map', { zoomControl:true }).setView(INIT || CENTER, ZOOM);
+    // OSM base
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom:19 }).addTo(map);
+    // Optional MapTiler overlay
+    const key = (MAP_TILER_KEY||'').trim();
+    if (key && key.toLowerCase() !== 'disable') {
+      L.tileLayer(`https://api.maptiler.com/maps/streets/{z}/{x}/{y}.png?key=${key}`, { maxZoom:20 }).addTo(map);
+    }
 
-const map = L.map('map', { zoomControl: true });
+    // Draggable marker
+    const marker = L.marker(INIT, { draggable:true }).addTo(map);
 
-/* MapTiler tiles */
-L.tileLayer(
-  `https://api.maptiler.com/maps/streets-v2/256/{z}/{x}/{y}.png?key=${MAP_KEY}`,
-  {
-    maxZoom: 20,
-    attribution:
-      '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> ' +
-      '& <a href="https://www.maptiler.com/copyright/">MapTiler</a>'
-  }
-).addTo(map);
+    const latEl = document.getElementById('lat');
+    const lonEl = document.getElementById('lon');
+    const gmaps = document.getElementById('gmaps');
+    const openmap = document.getElementById('openmap');
+    openmap.href = OPENMAP_URL;
 
-const pin = L.marker([startLat, startLon], { draggable: true }).addTo(map);
-map.setView([startLat, startLon], startZoom);
+    function fmt(v){ return (Math.round(v*1e6)/1e6).toFixed(6); }
+    function updateUI(ll){
+      latEl.textContent = fmt(ll.lat);
+      lonEl.textContent = fmt(ll.lng);
+      gmaps.href = `https://maps.google.com/?q=${fmt(ll.lat)},${fmt(ll.lng)}`;
+    }
+    updateUI(marker.getLatLng());
 
-const $coords = document.getElementById('coords');
-const $copyVol = document.getElementById('copyVol');
-const $copyFire = document.getElementById('copyFire');
+    marker.on('dragend', (e)=> updateUI(marker.getLatLng()));
+    map.on('click', (e)=> { marker.setLatLng(e.latlng); updateUI(e.latlng); });
 
-function fmt(v){ return (Math.round(v*1e6)/1e6).toFixed(6); }
-function updateLabel(){
-  const {lat, lng} = pin.getLatLng();
-  $coords.textContent = `${fmt(lat)}, ${fmt(lng)}`;
-}
-pin.on('move', updateLabel);
-updateLabel();
-
-async function copy(t){
-  try{ await navigator.clipboard.writeText(t); alert("Copied"); }
-  catch(e){
-    const ta = document.createElement('textarea'); ta.value=t; ta.style.position='fixed'; ta.style.opacity='0';
-    document.body.appendChild(ta); ta.focus(); ta.select();
-    try{ document.execCommand('copy'); alert("Copied"); } catch(_){ alert("Copy manually:\n"+t); }
-    document.body.removeChild(ta);
-  }
-}
-
-$copyVol.onclick = () => {
-  const {lat, lng} = pin.getLatLng();
-  const text = `${fmt(lat)} ${fmt(lng)} ${CONTACT||""}`.trim();
-  copy(text);
-};
-$copyFire.onclick = () => {
-  const {lat, lng} = pin.getLatLng();
-  const text = `fire ${fmt(lat)} ${fmt(lng)} ${CONTACT||""}`.trim();
-  copy(text);
-};
-
-// default mode hint
-if (MODE === "fire") {
-  // nothing extra
-}
-</script>
+    document.getElementById('copyBtn').onclick = async ()=>{
+      const s = `${fmt(marker.getLatLng().lat)}, ${fmt(marker.getLatLng().lng)}`;
+      try {
+        await navigator.clipboard.writeText(s);
+        alert('Copied');
+      } catch {
+        const ta = document.createElement('textarea');
+        ta.value = s; ta.style.position='fixed'; ta.style.opacity='0'; document.body.appendChild(ta);
+        ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
+        alert('Copied');
+      }
+    };
+  </script>
 </body>
 </html>
