@@ -29,7 +29,10 @@
 
 <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
-const MAP_KEY = "__MAP_KEY__";
+/* ====== MAP API KEY hardcoded here ====== */
+const MAP_KEY = "172f6ffa32d48a50ce4f15f8e3a550d4";
+/* ======================================== */
+
 const MODE = "__MODE__";  // "vol" or "fire"
 const CONTACT = "__CONTACT__";
 const startLat = __LAT__;
@@ -38,17 +41,16 @@ const startZoom = __ZOOM__;
 
 const map = L.map('map', { zoomControl: true });
 
-if (MAP_KEY && MAP_KEY !== "__MAP_KEY__") {
-  L.tileLayer(
-    `https://api.maptiler.com/maps/streets-v2/256/{z}/{x}/{y}.png?key=${MAP_KEY}`,
-    { maxZoom: 20, attribution: '&copy; OSM & MapTiler' }
-  ).addTo(map);
-} else {
-  L.tileLayer(
-    'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-    { maxZoom: 19, attribution: '&copy; OpenStreetMap' }
-  ).addTo(map);
-}
+/* MapTiler tiles */
+L.tileLayer(
+  `https://api.maptiler.com/maps/streets-v2/256/{z}/{x}/{y}.png?key=${MAP_KEY}`,
+  {
+    maxZoom: 20,
+    attribution:
+      '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> ' +
+      '& <a href="https://www.maptiler.com/copyright/">MapTiler</a>'
+  }
+).addTo(map);
 
 const pin = L.marker([startLat, startLon], { draggable: true }).addTo(map);
 map.setView([startLat, startLon], startZoom);
@@ -86,8 +88,9 @@ $copyFire.onclick = () => {
   copy(text);
 };
 
+// default mode hint
 if (MODE === "fire") {
-  // можно подсветить рамкой/цветом, но оставим просто режим
+  // nothing extra
 }
 </script>
 </body>
